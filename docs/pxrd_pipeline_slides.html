@@ -1,0 +1,621 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PXRD Extraction & Replot — Pipeline</title>
+<style>
+:root{
+  --bg:#f6f4ef; --ink:#221f1b; --muted:#6a655c; --faint:#928c81;
+  --rule:#ddd7cc; --panel:#efebe2; --code:#e9e4d9;
+  --copper:#b0682f; --copper-bg:#f2e6d8;   /* LLM — Cu Kα source */
+  --steel:#2f6f6b;  --steel-bg:#dcebe8;     /* CV — pixels */
+  --slate:#4a5568;  --slate-bg:#e2e5ea;     /* verifier / deterministic */
+  --pos:#3f7a44; --neg:#a3502a;
+}
+:root[data-theme="dark"]{
+  --bg:#141619; --ink:#e7e4dd; --muted:#9b958a; --faint:#6f6a60;
+  --rule:#2c2f34; --panel:#1c1f23; --code:#191c20;
+  --copper:#dc9457; --copper-bg:#2e2218;
+  --steel:#5cb4ab; --steel-bg:#152826;
+  --slate:#93a1b5; --slate-bg:#1b1f26;
+  --pos:#6fb26f; --neg:#d38157;
+}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#141619; --ink:#e7e4dd; --muted:#9b958a; --faint:#6f6a60;
+  --rule:#2c2f34; --panel:#1c1f23; --code:#191c20;
+  --copper:#dc9457; --copper-bg:#2e2218;
+  --steel:#5cb4ab; --steel-bg:#152826;
+  --slate:#93a1b5; --slate-bg:#1b1f26;
+  --pos:#6fb26f; --neg:#d38157;
+}}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased; overflow:hidden;
+}
+.deck{height:100vh;width:100vw;position:relative}
+.slide{
+  position:absolute;inset:0;opacity:0;visibility:hidden;
+  padding:clamp(1.6rem,4vw,3.6rem) clamp(1.6rem,6vw,6rem);
+  display:flex;flex-direction:column;
+  transition:opacity .28s ease;overflow-y:auto;
+}
+.slide.on{opacity:1;visibility:visible}
+.eyebrow{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.5rem}
+.stg{font:600 .74rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+  letter-spacing:.16em;color:var(--faint);text-transform:uppercase}
+.chip{font:600 .68rem/1 ui-monospace,monospace;letter-spacing:.08em;
+  text-transform:uppercase;padding:.28rem .5rem;border-radius:5px}
+.c-llm{background:var(--copper-bg);color:var(--copper)}
+.c-cv{background:var(--steel-bg);color:var(--steel)}
+.c-vf{background:var(--slate-bg);color:var(--slate)}
+h1{font-size:clamp(1.7rem,3.6vw,3rem);line-height:1.05;letter-spacing:-.02em;
+  font-weight:800;text-wrap:balance;margin-bottom:.4rem}
+h2{font-size:clamp(1.35rem,2.9vw,2.15rem);line-height:1.08;letter-spacing:-.015em;
+  font-weight:800;text-wrap:balance;margin-bottom:.9rem}
+.lede{font-size:clamp(1rem,1.5vw,1.18rem);color:var(--muted);max-width:60ch;line-height:1.5}
+.cols{display:grid;grid-template-columns:1.05fr .95fr;gap:clamp(1.2rem,3vw,2.6rem);
+  flex:1;align-items:start;margin-top:.4rem}
+@media(max-width:820px){.cols{grid-template-columns:1fr;gap:1.1rem}}
+p{line-height:1.55;margin:.55rem 0;max-width:58ch}
+.k{color:var(--ink);font-weight:650}
+ul{list-style:none;margin:.5rem 0}
+li{position:relative;padding-left:1.15rem;margin:.5rem 0;line-height:1.5;max-width:58ch}
+li::before{content:"";position:absolute;left:0;top:.62em;width:.42rem;height:.42rem;
+  background:var(--copper);border-radius:1px;transform:rotate(45deg)}
+.algo{background:var(--code);border-left:3px solid var(--steel);border-radius:0 8px 8px 0;
+  padding:.9rem 1.05rem;margin:.6rem 0;
+  font:.83rem/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-x:auto}
+.algo .cm{color:var(--faint)}
+.algo .fn{color:var(--copper);font-weight:600}
+.algo b{color:var(--ink)}
+.eq{background:var(--panel);border-radius:8px;padding:.8rem 1rem;margin:.55rem 0;
+  font:1.02rem/1.7 "Cambria Math",Georgia,serif;overflow-x:auto;text-align:center}
+.eq small{color:var(--muted);font-size:.82rem}
+.tag{font:600 .72rem/1 ui-monospace,monospace;color:var(--faint);
+  letter-spacing:.06em;text-transform:uppercase;margin:.9rem 0 .3rem}
+.why{border-top:1px dashed var(--rule);margin-top:auto;padding-top:.7rem;
+  font-size:.92rem;color:var(--muted)}
+.why b{color:var(--neg);font-weight:650}
+.mono{font-family:ui-monospace,Menlo,monospace;font-size:.9em}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}
+.card{background:var(--panel);border-radius:9px;padding:.8rem .9rem}
+.card h4{font-size:.82rem;letter-spacing:.02em;margin-bottom:.3rem;color:var(--copper);
+  font-family:ui-monospace,monospace;text-transform:uppercase}
+.card p{font-size:.88rem;margin:.15rem 0;color:var(--muted);max-width:none}
+/* progress rail */
+.rail{position:fixed;top:0;left:0;right:0;height:3px;display:flex;z-index:20}
+.rail i{flex:1;background:var(--rule)}
+.rail i.done{background:var(--copper)}
+/* nav */
+.nav{position:fixed;bottom:1rem;right:1.3rem;display:flex;align-items:center;gap:.8rem;
+  font:600 .8rem/1 ui-monospace,monospace;color:var(--muted);z-index:20}
+.nav button{background:var(--panel);color:var(--ink);border:1px solid var(--rule);
+  border-radius:6px;width:2rem;height:2rem;cursor:pointer;font-size:1rem;line-height:1}
+.nav button:hover{border-color:var(--copper)}
+.nav button:focus-visible{outline:2px solid var(--copper);outline-offset:2px}
+.count{min-width:3.4rem;text-align:right}
+.legend{position:fixed;bottom:1rem;left:1.3rem;display:flex;gap:.8rem;z-index:20;
+  font:600 .66rem/1 ui-monospace,monospace;letter-spacing:.06em;text-transform:uppercase}
+.legend span{display:flex;align-items:center;gap:.35rem;color:var(--muted)}
+.legend b{width:.7rem;height:.7rem;border-radius:2px;display:inline-block}
+.themebtn{position:fixed;top:.9rem;right:1.3rem;z-index:20;background:var(--panel);
+  border:1px solid var(--rule);border-radius:6px;color:var(--muted);cursor:pointer;
+  font:600 .68rem/1 ui-monospace,monospace;padding:.4rem .55rem;letter-spacing:.05em}
+/* title slide */
+.hero{display:flex;flex-direction:column;justify-content:center;height:100%}
+.hero .sig{width:min(560px,80%);height:90px;margin:1.4rem 0}
+.pill{display:inline-flex;gap:.5rem;font:600 .72rem/1 ui-monospace,monospace;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+.mapwrap{margin:.4rem 0}
+.flowrow{display:flex;align-items:stretch;gap:.4rem;flex-wrap:wrap}
+.node{background:var(--panel);border-radius:8px;padding:.6rem .7rem;flex:1;min-width:120px;
+  border-top:3px solid var(--copper)}
+.node.cv{border-top-color:var(--steel)}
+.node.vf{border-top-color:var(--slate)}
+.node .n{font:700 .7rem/1 ui-monospace,monospace;color:var(--faint)}
+.node .t{font-weight:700;font-size:.92rem;margin:.2rem 0}
+.node .d{font-size:.78rem;color:var(--muted);line-height:1.35}
+.arrow{align-self:center;color:var(--faint);font-size:1.1rem}
+kbd{font:600 .72rem ui-monospace,monospace;background:var(--code);border:1px solid var(--rule);
+  border-radius:4px;padding:.05rem .35rem}
+.two-list{columns:2;column-gap:2rem}
+@media(max-width:820px){.two-list{columns:1}}
+</style>
+</head>
+<body>
+<div class="rail" id="rail"></div>
+<button class="themebtn" id="theme">◐ theme</button>
+<div class="deck" id="deck">
+
+<!-- 0 TITLE -->
+<section class="slide hero">
+  <div class="pill">PEAK-COF · digitization engine</div>
+  <h1 style="max-width:20ch">From a printed PXRD figure to trusted (2θ, intensity) data</h1>
+  <svg class="sig" viewBox="0 0 560 90" fill="none" aria-hidden="true">
+    <line x1="0" y1="78" x2="560" y2="78" stroke="var(--rule)" stroke-width="1"/>
+    <path d="M0 74 L60 72 L90 30 L108 66 L150 60 L190 8 L210 64 L250 58 L300 55
+             L330 40 L352 60 L420 56 L470 46 L520 55 L560 54"
+          stroke="var(--copper)" stroke-width="2.4" stroke-linejoin="round"/>
+    <path d="M0 74 L60 72 L90 30 L108 66 L150 60 L190 8 L210 64 L250 58 L300 55
+             L330 40 L352 60 L420 56 L470 46 L520 55 L560 54 L560 78 L0 78 Z"
+          fill="var(--copper)" opacity="0.08"/>
+  </svg>
+  <p class="lede">A six-stage pipeline where computer vision owns the pixels, a
+  vision-language model owns the semantics, and a deterministic verifier decides
+  what to trust. This deck walks every stage — the algorithm, the parameters, the
+  math, and the failure mode each step exists to defeat.</p>
+  <div class="tag" style="margin-top:1.4rem">Aaron Gao · src/pxrd_fetcher/v2 · tools/</div>
+</section>
+
+<!-- 1 PHILOSOPHY + MAP -->
+<section class="slide">
+  <div class="eyebrow"><span class="stg">Overview</span></div>
+  <h2>One principle, six stages</h2>
+  <p class="lede" style="margin-bottom:1rem"><span class="k">No single source is trusted.</span>
+  The LLM is brilliant at reading a figure but invents exact numbers; CV measures pixels
+  precisely but can't tell a diffraction axis from a drawing. So every claim is
+  cross-checked against a source that failed differently.</p>
+  <div class="grid2" style="margin-bottom:1.1rem">
+    <div class="card"><h4>LLM · semantics</h4><p>Is this PXRD? How many curves, what
+      colors/labels, where's the axes box, what tick numbers are printed?</p></div>
+    <div class="card"><h4>CV · pixels</h4><p>Exact frame lines, tick-mark positions,
+      the real ink of each curve, at working resolution.</p></div>
+    <div class="card"><h4>Verifier · arbitration</h4><p>Deterministic pixel-fidelity
+      score decides accept/reject. Never asks the source that made the claim.</p></div>
+    <div class="card"><h4>Result</h4><p>Every accepted curve carries a full evidence
+      chain: snap rate, precision, recall, calibration provenance.</p></div>
+  </div>
+  <div class="flowrow mapwrap">
+    <div class="node"><div class="n">1 · LLM</div><div class="t">Locate</div><div class="d">panels on the page</div></div>
+    <div class="arrow">→</div>
+    <div class="node cv"><div class="n">2 · CV+LLM</div><div class="t">Crop + read</div><div class="d">render, analyze, reframe</div></div>
+    <div class="arrow">→</div>
+    <div class="node cv"><div class="n">3 · CV</div><div class="t">Frame</div><div class="d">find the axes box</div></div>
+    <div class="arrow">→</div>
+    <div class="node vf"><div class="n">4 · VERIFY</div><div class="t">Calibrate</div><div class="d">px → 2θ, consensus</div></div>
+    <div class="arrow">→</div>
+    <div class="node"><div class="n">5 · LLM+CV</div><div class="t">Trace</div><div class="d">anchors → snap → verify</div></div>
+    <div class="arrow">→</div>
+    <div class="node vf"><div class="n">6 · VERIFY</div><div class="t">Decide</div><div class="d">accept + postprocess</div></div>
+  </div>
+</section>
+
+<!-- 2 STAGE 1 LOCATE -->
+<section class="slide">
+  <div class="eyebrow"><span class="stg">Stage 1 — per page</span><span class="chip c-llm">LLM</span></div>
+  <h2>Locate the PXRD panels</h2>
+  <div class="cols">
+    <div>
+      <p>Each PDF page is rendered once and shown to the model with the page's text.
+      The model returns a bounding box for <span class="k">every</span> PXRD panel — and
+      only PXRD, explicitly rejecting SEM/TEM, IR/Raman/NMR, TGA, isotherms, and schematics.</p>
+      <p>This is the cheap screening pass: one call per page, boxes in fractional page
+      coordinates. It's also what the standalone "does this paper contain any PXRD?"
+      scanner reuses.</p>
+      <div class="tag">Why a whole extra stage</div>
+      <p>A page is mostly not-PXRD. Locating first means the expensive per-figure work
+      only ever runs on real diffraction panels.</p>
+    </div>
+    <div>
+      <div class="tag">Algorithm — <span class="mono">llm.locate_panels</span></div>
+      <div class="algo"><span class="cm"># page → 150 dpi, downscale to ≤1600 px</span>
+page = <span class="fn">render_page</span>(pdf, dpi=150)
+page = <span class="fn">downscale</span>(page, max_dim=<b>1600</b>)
+
+<span class="cm"># one vision call, JSON out</span>
+panels = <span class="fn">locate_panels</span>(page, page_text)
+<span class="cm"># → [{x0,y0,x1,y1}, ...] fractional</span>
+<span class="cm"># EXCLUDE: SEM/TEM, IR/Raman/NMR,</span>
+<span class="cm">#          TGA, isotherms, schematics</span></div>
+      <div class="grid2">
+        <div class="card"><h4>in</h4><p>page image + text</p></div>
+        <div class="card"><h4>out</h4><p>N fractional panel boxes</p></div>
+      </div>
+    </div>
+  </div>
+  <div class="why"><b>Defeats:</b> wasting vision calls on the 80% of page area that
+  isn't a diffraction plot.</div>
+</section>
+
+<!-- 3 STAGE 2 RENDER + ANALYZE -->
+<section class="slide">
+  <div class="eyebrow"><span class="stg">Stage 2 — per panel</span><span class="chip c-cv">CV</span><span class="chip c-llm">LLM</span></div>
+  <h2>Re-render at working resolution, then read deeply</h2>
+  <div class="cols">
+    <div>
+      <p><span class="k">Render.</span> The panel is <span class="k">not</span> cropped from
+      the page bitmap — it's re-rendered straight from the PDF vector at an <span class="k">adaptive
+      DPI</span> so every panel arrives ~1500 px wide. A small panel on a page rendered at
+      300 dpi has tick marks only a few pixels tall; CV and OCR both fail there.</p>
+      <div class="eq">dpi = clamp( 72 · 1500 / clip_width , <small>220 … 900</small> )</div>
+      <p><span class="k">Analyze.</span> One vision call reads the whole figure at once and
+      returns the semantic inventory used by every later stage.</p>
+    </div>
+    <div>
+      <div class="tag">Algorithm — <span class="mono">_render_panel · analyze_figure</span></div>
+      <div class="algo"><span class="cm"># vector re-render, adaptive dpi</span>
+crop = <span class="fn">render_region</span>(pdf_clip, pad=<b>12%</b>)
+
+a = <span class="fn">analyze_figure</span>(crop)
+<span class="cm"># a.is_pxrd        bool</span>
+<span class="cm"># a.plot_box       axes-frame rect (frac)</span>
+<span class="cm"># a.curves[]       label · material ·</span>
+<span class="cm">#                  sample_state · color ·</span>
+<span class="cm">#                  is_stick_pattern</span>
+<span class="cm"># a.x_tick_values  printed axis numbers</span>
+<span class="cm"># a.x_axis_title · grayscale_only · has_inset</span></div>
+      <p style="font-size:.86rem;color:var(--muted)">The color word per curve becomes the
+      identity anchor used later for both tracing and replot coloring.</p>
+    </div>
+  </div>
+  <div class="why"><b>Defeats:</b> ticks/labels too small to detect (resolution), and the
+  need for many small model calls (one deep read replaces several).</div>
+</section>
+
+<!-- 4 STAGE 2+ REFRAME -->
+<section class="slide">
+  <div class="eyebrow"><span class="stg">Stage 2⁺ — self-correction</span><span class="chip c-cv">CV</span><span class="chip c-llm">LLM</span></div>
+  <h2>Reframe an offset crop</h2>
+  <div class="cols">
+    <div>
+      <p>The locate step sometimes returns a box shifted off the real plot — it clips the
+      target on one side (losing high-2θ data) and pulls a neighbor panel in on the other.
+      The returned <span class="mono">plot_box</span> reveals this: it touches a crop edge,
+      or leaves a huge margin opposite.</p>
+      <ul>
+        <li><span class="k">Clipped side</span> (plot_box within 0.03 of an edge) expands
+          outward 0.65× the frame to reveal the true axis extent.</li>
+        <li><span class="k">Other sides</span> tighten to fixed label margins
+          (L .26 · R .14 · T .14 · B .22) to trim the neighbor.</li>
+        <li><span class="k">Both edges clipped</span> on an axis ⇒ the frame already fills
+          the crop ⇒ don't expand (would engulf neighbors).</li>
+      </ul>
+    </div>
+    <div>
+      <svg viewBox="0 0 300 120" width="100%" style="margin:.3rem 0 .6rem">
+        <rect x="6" y="10" width="130" height="86" rx="4" fill="none" stroke="var(--rule)"/>
+        <rect x="70" y="18" width="66" height="70" rx="2" fill="var(--copper)" opacity=".14" stroke="var(--copper)"/>
+        <text x="24" y="56" font-size="9" font-family="ui-monospace" fill="var(--neg)">neighbor</text>
+        <text x="88" y="105" font-size="8" font-family="ui-monospace" fill="var(--muted)">clipped →</text>
+        <text x="150" y="56" font-size="16" fill="var(--faint)">→</text>
+        <rect x="176" y="10" width="118" height="86" rx="4" fill="none" stroke="var(--steel)"/>
+        <rect x="196" y="20" width="86" height="66" rx="2" fill="var(--steel)" opacity=".14" stroke="var(--steel)"/>
+        <text x="210" y="106" font-size="8" font-family="ui-monospace" fill="var(--muted)">full frame</text>
+      </svg>
+      <div class="tag">Bounded + safety net</div>
+      <div class="algo"><span class="cm"># at most 2 reframe passes</span>
+if <span class="fn">needs_reframe</span>(plot_box):
+    crop = <span class="fn">render_region</span>(reframe_clip(...))
+    a = <span class="fn">analyze_figure</span>(crop)   <span class="cm"># re-read</span>
+
+<span class="cm"># never make a figure worse:</span>
+if reframed and result == REJECT:
+    <span class="fn">fall_back</span>(original_crop)</div>
+    </div>
+  </div>
+  <div class="why"><b>Defeats:</b> truncated high-angle data + neighbor-panel bleed from a
+  mis-placed locate box — recovered e.g. 2–25° → 2–64° on one figure.</div>
+</section>
+
+<!-- 5 STAGE 3 FRAME -->
+<section class="slide">
+  <div class="eyebrow"><span class="stg">Stage 3 — per panel</span><span class="chip c-cv">CV</span></div>
+  <h2>Find the axes frame — by evidence, not by long lines</h2>
+  <div class="cols">
+    <div>
+      <p>A multi-panel crop is full of straight lines (other plots, drawings, molecular
+      structures). "Longest line" fails. Candidate frames are <span class="k">scored by axis
+      evidence</span>, and the search is restricted to the LLM's <span class="mono">plot_box</span>
+      neighborhood.</p>
+      <div class="tag">Evidence score</div>
+      <ul>
+        <li>tick marks below the bottom edge</li>
+        <li>numeric labels under those ticks (ticks without numbers = weak — defeats fake
+          SEM-inset scale bars)</li>
+        <li>curve ink inside the box + a size prior</li>
+      </ul>
+      <p>Many authors draw <span class="k">no full box</span> — just a bottom axis. So each
+      edge is classified, never invented.</p>
+    </div>
+    <div>
+      <div class="tag">Topology-adaptive — <span class="mono">finalize_frame</span></div>
+      <div class="algo"><span class="cm"># each edge is one of two kinds:</span>
+
+<b>VERIFIED</b>  contiguous stroke ≥ <b>65%</b> of box
+          height, within ±3.5% of the
+          bottom-axis endpoint
+
+<b>OPEN</b>      rebuilt from evidence, never
+          from arbitrary ink:
+          bottom-axis run
+            ∩ LLM plot_box ± 3%
+            ∩ tick evidence ± 1.4 gaps</div>
+      <div class="tag">Frame ladder</div>
+      <div class="algo">evidence-scored  →  hint-local  →  whole-crop
+<span class="cm"># first candidate whose calibration</span>
+<span class="cm"># passes the trust bar wins</span></div>
+    </div>
+  </div>
+  <div class="why"><b>Defeats:</b> phantom borders on borderless plots, stacked-peak columns
+  masquerading as an axis, and welded neighbor axes (→ fake 70°+ peaks).</div>
+</section>
+
+<!-- 6 STAGE 4 CALIBRATION -->
+<section class="slide">
+  <div class="eyebrow"><span class="stg">Stage 4 — per panel</span><span class="chip c-vf">VERIFY</span></div>
+  <h2>Calibrate pixels → 2θ by consensus</h2>
+  <div class="cols">
+    <div>
+      <p>A pixel column maps to a 2θ value by a linear fit. But which pixels map to which
+      numbers? Three <span class="k">independent</span> sources answer, and calibration is
+      trusted only when they agree.</p>
+      <div class="eq">2θ(x) = slope · x + intercept</div>
+      <ul>
+        <li><span class="k">CV</span> tick-mark pixel positions</li>
+        <li><span class="k">LLM</span> printed tick values</li>
+        <li><span class="k">OCR</span> (pixel, value) pairs read off the strip</li>
+      </ul>
+      <p>If sources disagree, the axis strip is magnified and <span class="k">re-read</span>,
+      then arbitrated. If nothing clears the bar, the figure is <span class="k">rejected</span> —
+      never guessed.</p>
+    </div>
+    <div>
+      <div class="tag">Decision — <span class="mono">consensus_calibration</span></div>
+      <div class="algo"><b>consensus</b>    two fits agree within <b>0.5°</b>
+<b>single</b>       one source, ≥3 pts, rmse ≤ <b>0.15°</b>
+<b>disagree /</b>   → <span class="fn">retry</span>: LLM re-reads axis strip
+<b>weak</b>          → <span class="fn">arbitrate</span>: best err &lt;0.5°
+                       &amp; runner-up &gt;1.0°
+<b>failed</b>       → REJECT figure</div>
+      <div class="tag">Trusted output window</div>
+      <div class="eq"><small>2θ range = tick extent ± 1.25 gaps ∩ frame physical extent</small></div>
+      <p style="font-size:.86rem;color:var(--muted)">A trace beyond the outermost labeled
+      tick is neighbor ink or hallucination — the drawn axis end is a hard bound.</p>
+    </div>
+  </div>
+  <div class="why"><b>Defeats:</b> a single mis-read tick silently skewing every downstream
+  2θ; typical consensus rmse lands at 0.003–0.03°.</div>
+</section>
+
+<!-- 7 STAGE 5 ANCHORS -->
+<section class="slide">
+  <div class="eyebrow"><span class="stg">Stage 5a — per panel</span><span class="chip c-llm">LLM</span><span class="chip c-cv">CV</span></div>
+  <h2>Trace each curve as an anchor polyline</h2>
+  <div class="cols">
+    <div>
+      <p>A tick grid is drawn onto the crop, then the model is asked to trace <span class="k">each
+      named curve</span> as a coarse polyline in grid-fractional coordinates — 40–80 points
+      per curve, all curves in one call. Naming each curve by its color + label makes the
+      model follow the <span class="k">right</span> one through overlaps.</p>
+      <p>The anchors are a <span class="k">shape hint</span>, not the final data. They only
+      have to be close enough for the pixel-snap step to lock onto real ink.</p>
+    </div>
+    <div>
+      <div class="tag">Algorithm — <span class="mono">draw_grid_overlay · trace_anchors</span></div>
+      <div class="algo">grid = <span class="fn">draw_grid_overlay</span>(crop, frame)
+
+anchors = <span class="fn">trace_anchors</span>(grid, curves_desc)
+<span class="cm"># per curve: [(x_frac, y_frac), ...]</span>
+<span class="cm">#   40–80 points, grid space</span>
+<span class="cm"># described as: "[red] TpPa-1 (exp)"</span>
+<span class="cm"># so overlapping curves stay separate</span></div>
+      <p style="font-size:.86rem;color:var(--muted)">Curves the model fails to return are
+      counted as failures later — they can't vanish silently.</p>
+    </div>
+  </div>
+  <div class="why"><b>Defeats:</b> color-mask-only tracing, which loses a curve wherever two
+  colors overlap. A semantic anchor survives the crossing.</div>
+</section>
+
+<!-- 8 STAGE 5+ SNAP + VERIFY -->
+<section class="slide">
+  <div class="eyebrow"><span class="stg">Stage 5b — per series</span><span class="chip c-cv">CV</span><span class="chip c-vf">VERIFY</span></div>
+  <h2>Snap to real ink, then verify against the original pixels</h2>
+  <div class="cols">
+    <div>
+      <p>Each anchor point is <span class="k">snapped</span> to the nearest real ink pixel,
+      column by column. The ink mask is tried progressively — exact color first, then
+      broader — and the best attempt wins by a blended score.</p>
+      <div class="algo"><span class="cm"># mask ladder, retry until best</span>
+<span class="fn">color</span>:{c} tol .045 → <span class="fn">foreground</span> .045 → <span class="fn">fg-wide</span> .09
+score = 0.4·snap + 0.4·prec + 0.2·rec</div>
+      <p>Then a <span class="k">deterministic verifier</span> compares the trace to the
+      <span class="k">original</span> pixels — non-circular, because it never asks the model
+      that produced the trace.</p>
+    </div>
+    <div>
+      <div class="tag">Fidelity — vs original ink</div>
+      <div class="eq"><small>snap_rate = anchors landing on ink<br>
+        precision = traced points that are real ink<br>
+        recall = real ink covered by the trace</small></div>
+      <div class="tag">Accept a series iff all hold</div>
+      <div class="algo">snap_rate  ≥ <b>0.55</b>
+precision  ≥ <b>0.70</b>
+recall     ≥ <b>0.60</b>
+confidence ≥ <b>0.55</b></div>
+      <div class="eq"><small>confidence =</small><br>
+        0.30·snap + 0.30·prec + 0.25·rec + 0.15·(1 − dev/0.25)</div>
+      <p style="font-size:.84rem;color:var(--muted)">Plus a ≥5° span guard and the 2θ-window
+      guard — perfect scores over a sliver are meaningless.</p>
+    </div>
+  </div>
+  <div class="why"><b>Defeats:</b> plausible-but-wrong traces. The check is against the
+  photograph, not the model's own claim.</div>
+</section>
+
+<!-- 9 STAGE 6 DECISION + POSTPROCESS -->
+<section class="slide">
+  <div class="eyebrow"><span class="stg">Stage 6 — per figure</span><span class="chip c-vf">VERIFY</span></div>
+  <h2>Decide, then turn pixels into a physical pattern</h2>
+  <div class="cols">
+    <div>
+      <div class="tag">Figure verdict</div>
+      <ul>
+        <li><span class="k">accepted</span> — every traced series passed</li>
+        <li><span class="k">partial</span> — some passed, others explicitly rejected</li>
+        <li><span class="k">rejected</span> — none passed</li>
+      </ul>
+      <p>Figure confidence = mean of accepted-series confidence. Every rejection carries a
+      reason string.</p>
+      <div class="tag">Then, per accepted series</div>
+      <p>The raw pixel trace is converted to a clean (2θ, relative-intensity) curve through
+      a fixed post-processing chain.</p>
+    </div>
+    <div>
+      <div class="tag">Post-process — <span class="mono">process_curve</span></div>
+      <div class="algo">1 <span class="fn">baseline_asls</span>(lam=1e7, p=.01, 10 iter)
+2 subtract baseline, clip negatives
+3 zero-anchor at 5th percentile
+4 <span class="fn">normalize_intensity</span> → 0–100
+5 interpolate to uniform <b>0.02°</b> grid
+6 <span class="fn">savgol_filter</span>(window=11, poly=3)
+7 write CSV: two_theta_deg, rel_intensity</div>
+      <div class="eq"><small>ALS: minimize&nbsp;</small> Σ wᵢ(yᵢ−zᵢ)² + λ Σ (Δ²zᵢ)²</div>
+      <p style="font-size:.84rem;color:var(--muted)">This chain is per-series and non-linear,
+      so it is <span class="k">irreversible</span> — you cannot recover pixel rows from the CSV.
+      That fact shapes the replot step next.</p>
+    </div>
+  </div>
+  <div class="why"><b>Output:</b> per figure — <span class="mono">result.json</span> (full evidence),
+  <span class="mono">crop.png</span>, <span class="mono">overlay.png</span>, one CSV per accepted curve.</div>
+</section>
+
+<!-- 10 REPLOT -->
+<section class="slide">
+  <div class="eyebrow"><span class="stg">Replot — offline, no API</span><span class="chip c-cv">CV</span></div>
+  <h2>Redraw each curve — faithful color without the pixels</h2>
+  <div class="cols">
+    <div>
+      <p>Because the intensity transform is irreversible, the replot is drawn from the CSV,
+      not the pixels. The hard part is <span class="k">color</span>: the LLM's color <span class="k">name</span>
+      ("purple") is reliable, but the exact shade is not.</p>
+      <p>So identity comes from the name, and the <span class="k">shade</span> is sampled from
+      the original figure's actual ink — k-means clusters inside the plot box, in
+      <span class="k">LAB</span> space (perceptually uniform).</p>
+      <ul>
+        <li><span class="k">Unique</span> color name → nearest ink cluster = faithful shade.</li>
+        <li><span class="k">Duplicate</span> name (author drew same-color stacked curves) →
+          a qualitative palette so every curve stays distinguishable.</li>
+      </ul>
+    </div>
+    <div>
+      <div class="tag">Algorithm — <span class="mono">color_sampler · qa_montage</span></div>
+      <div class="algo"><span class="cm"># isolate ink inside plot_box</span>
+ink = saturated(S≥55,V≥45) OR dark(V≤110)
+      minus white paper
+
+<span class="cm"># perceptual clustering</span>
+lab = <span class="fn">cvtColor</span>(ink, RGB→LAB)
+clusters = <span class="fn">kmeans</span>(lab, k=n+3)
+
+<span class="cm"># assign</span>
+if name unique: shade = nearest cluster
+else:           shade = palette[i]  <span class="cm"># distinct</span></div>
+      <p style="font-size:.86rem;color:var(--muted)">Curves are offset-stacked (60 units) to
+      match the journal figure's layout. Montage = crop | overlay | replot.</p>
+    </div>
+  </div>
+  <div class="why"><b>Defeats:</b> a replot where three similar reds blur together, or where a
+  guessed hex is nothing like the printed curve.</div>
+</section>
+
+<!-- 11 DERIVED LAYERS -->
+<section class="slide">
+  <div class="eyebrow"><span class="stg">Downstream — offline</span><span class="chip c-vf">VERIFY</span></div>
+  <h2>Three guard layers on top of the extracted data</h2>
+  <div class="grid2" style="gap:.8rem">
+    <div class="card"><h4>Drop computed curves</h4>
+      <p><span class="mono">curve_is_computed</span> removes simulated / calculated /
+      Pawley-refined / difference / AA-AB-stacking reference traces so the database holds
+      only measured experimental data. Trusts the explicit <span class="mono">sample_state</span>;
+      label text is fallback (so "AA stacking CTF-1" the material still counts).</p></div>
+    <div class="card"><h4>Offline quality filter</h4>
+      <p>Two zero-API layers: CSV waveform signatures (plateau→jump staircase, needle notch,
+      sawtooth via plateau segmentation of the smoothed trace) + tracing evidence
+      (precision &lt;0.80 / snap &lt;0.80 / residual &gt;15 px). Any bad series quarantines the
+      figure. Calibrated on a 250-figure human audit.</p></div>
+    <div class="card"><h4>First-peak feature</h4>
+      <p>Denoised lowest-angle Bragg peak: SNR gate vs a rolling baseline · multi-scale
+      persistence · FWHM window · edge/truncation flag. Each value carries a status
+      (ok / low_confidence / truncated / no_bragg_peak) + d-spacing.</p></div>
+    <div class="card"><h4>Everything is tiered, nothing deleted</h4>
+      <p>Quality tier, match tier, first-peak status — downstream analysis filters by
+      confidence rather than trusting a single flag. Every value is traceable to its source.</p></div>
+  </div>
+  <div class="why" style="margin-top:1rem"><b>Known blind spot:</b> geometric errors (3D-perspective
+  plots, whole-axis mis-calibration) leave clean-looking CSVs — invisible to the offline
+  filter, catchable only by eye.</div>
+</section>
+
+<!-- 12 RECAP -->
+<section class="slide">
+  <div class="eyebrow"><span class="stg">Recap</span></div>
+  <h2>The whole path, one line each</h2>
+  <div style="margin-top:.6rem">
+  <div class="algo" style="border-left-color:var(--copper);font-size:.9rem;line-height:1.9">
+<span class="c-llm" style="padding:.1rem .4rem;border-radius:4px">1 LOCATE</span>   page → PXRD panel boxes                       <span class="cm">llm.locate_panels</span>
+<span class="c-cv"  style="padding:.1rem .4rem;border-radius:4px">2 RENDER</span>   vector re-render @ adaptive dpi + deep read   <span class="cm">_render_panel · analyze_figure</span>
+<span class="c-cv"  style="padding:.1rem .4rem;border-radius:4px">2⁺ REFRAME</span> fix offset/clipped crop, safety-net fallback  <span class="cm">needs_reframe · reframe_clip</span>
+<span class="c-cv"  style="padding:.1rem .4rem;border-radius:4px">3 FRAME</span>    evidence-scored, topology-adaptive axes box   <span class="cm">select · finalize_frame</span>
+<span class="c-vf"  style="padding:.1rem .4rem;border-radius:4px">4 CALIB</span>    px→2θ, 3-source consensus within 0.5°         <span class="cm">consensus_calibration</span>
+<span class="c-llm" style="padding:.1rem .4rem;border-radius:4px">5 TRACE</span>    LLM anchor polylines on a tick grid           <span class="cm">draw_grid_overlay · trace_anchors</span>
+<span class="c-cv"  style="padding:.1rem .4rem;border-radius:4px">5⁺ SNAP</span>   lock to ink + fidelity verify vs originals    <span class="cm">extract_series</span>
+<span class="c-vf"  style="padding:.1rem .4rem;border-radius:4px">6 DECIDE</span>   accept/partial/reject + ALS/normalize/smooth  <span class="cm">process_curve</span>
+<span class="c-cv"  style="padding:.1rem .4rem;border-radius:4px">↺ REPLOT</span>  LAB-sampled color, CSV → figure               <span class="cm">color_sampler · qa_montage</span>
+  </div>
+  </div>
+  <p class="lede" style="margin-top:1.2rem">Every arrow is cross-checked by a source that
+  fails differently. That is the whole design: <span class="k">measure twice with two kinds
+  of eyes, and let a deterministic referee decide.</span></p>
+  <div class="tag" style="margin-top:1.4rem">src/pxrd_fetcher/v2/{pipeline,llm,vision,calibrate,extract}.py · postprocess.py · tools/{color_sampler,quality_filter,first_peak}.py</div>
+</section>
+
+</div>
+
+<div class="legend">
+  <span><b style="background:var(--copper)"></b>LLM</span>
+  <span><b style="background:var(--steel)"></b>CV</span>
+  <span><b style="background:var(--slate)"></b>Verify</span>
+</div>
+<div class="nav">
+  <button id="prev" aria-label="previous slide">‹</button>
+  <span class="count"><span id="cur">1</span>/<span id="tot">13</span></span>
+  <button id="next" aria-label="next slide">›</button>
+</div>
+
+<script>
+const slides=[...document.querySelectorAll('.slide')];
+const rail=document.getElementById('rail');
+slides.forEach(()=>rail.insertAdjacentHTML('beforeend','<i></i>'));
+const bars=[...rail.children];
+let i=0;
+document.getElementById('tot').textContent=slides.length;
+function show(n){
+  i=Math.max(0,Math.min(slides.length-1,n));
+  slides.forEach((s,k)=>s.classList.toggle('on',k===i));
+  bars.forEach((b,k)=>b.classList.toggle('done',k<=i));
+  document.getElementById('cur').textContent=i+1;
+  slides[i].scrollTop=0;
+}
+document.getElementById('next').onclick=()=>show(i+1);
+document.getElementById('prev').onclick=()=>show(i-1);
+addEventListener('keydown',e=>{
+  if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){e.preventDefault();show(i+1);}
+  if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();show(i-1);}
+  if(e.key==='Home')show(0); if(e.key==='End')show(slides.length-1);
+});
+// theme toggle
+const root=document.documentElement, tb=document.getElementById('theme');
+tb.onclick=()=>{
+  const cur=root.getAttribute('data-theme')
+    || (matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
+  root.setAttribute('data-theme',cur==='dark'?'light':'dark');
+};
+show(0);
+</script>
+</body>
+</html>

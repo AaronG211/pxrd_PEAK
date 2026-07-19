@@ -1,0 +1,31 @@
+# ── secrets — NEVER commit (this is a PUBLIC repo) ────────────────────
+.env
+.env.*
+!.env.example
+*.key
+
+# ── virtualenv / caches ───────────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.egg-info/
+build/
+dist/
+.DS_Store
+
+# ── research data & others' datasets (large, not ours to redistribute) ─
+outputs/          # 15 GB run artifacts + pxrd.db
+data/             # Peter Walther COF extraction dataset
+tmp/
+
+# ── copyrighted source PDFs — do not publish ──────────────────────────
+sample_papers/    # ~19 GB of journal PDFs
+
+# ── unpublished research IP (kept out of the PUBLIC repo by default) ───
+# Delete a line here if you decide that item should be public.
+output/            # generated proposal PDFs + degradation scan outputs
+proposals/         # research proposal drafts
+plan/*.docx        # research planning docs
+analysis/          # research-specific DB scan scripts

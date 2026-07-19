@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PXRD Fetcher — Core Modules & Pipeline</title>
+<style>
+  :root {
+    --llm: #b3541e;        /* copper — LLM / semantic stages */
+    --cv: #1f3b73;         /* steel navy — deterministic CV */
+    --ver: #4a7c59;        /* green — verification */
+    --ink: #1a1d24;
+    --mut: #5c6270;
+    --line: #d9dce3;
+    --bg-soft: #f4f5f8;
+    --bad: #a33327;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  @page { size: letter; margin: 10mm 11mm; }
+  body { font: 10.5px/1.45 "Helvetica Neue", Helvetica, Arial, sans-serif;
+         color: var(--ink); }
+  .page { page-break-after: always; }
+  .page:last-child { page-break-after: auto; }
+
+  h1 { font-size: 21px; letter-spacing: -0.3px; }
+  h2 { font-size: 14px; margin: 0 0 8px; letter-spacing: -0.2px; }
+  h3 { font-size: 11px; margin: 0 0 4px; }
+  p  { margin: 0 0 6px; }
+  code, .mono { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 9.3px; }
+  code { background: var(--bg-soft); padding: 0.5px 4px; border-radius: 3px; }
+
+  .band { background: var(--cv); color: #fff; border-radius: 10px;
+          padding: 16px 20px 14px; margin-bottom: 12px; }
+  .band .sub { color: #c8d2e8; font-size: 11px; margin-top: 4px; }
+  .band .meta { color: #8fa3cc; font-size: 9px; margin-top: 8px; }
+
+  .row { display: flex; gap: 8px; margin-bottom: 10px; }
+  .col { flex: 1; }
+
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px;
+          break-inside: avoid; background: #fff; }
+  .card.soft { background: var(--bg-soft); border: none; }
+  .kicker { font-size: 8px; font-weight: 700; letter-spacing: 1.2px;
+            text-transform: uppercase; margin-bottom: 3px; }
+  .k-llm { color: var(--llm); } .k-cv { color: var(--cv); } .k-ver { color: var(--ver); }
+
+  .pill { display: inline-block; border-radius: 999px; padding: 1px 8px;
+          font-size: 8.5px; font-weight: 600; color: #fff; }
+  .p-llm { background: var(--llm); } .p-cv { background: var(--cv); }
+  .p-ver { background: var(--ver); } .p-mut { background: #7b8194; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 9.3px; }
+  th { text-align: left; font-size: 8px; text-transform: uppercase;
+       letter-spacing: 0.8px; color: var(--mut); padding: 3px 8px 3px 0;
+       border-bottom: 1.4px solid var(--ink); }
+  td { padding: 3.5px 8px 3.5px 0; border-bottom: 0.6px solid var(--line);
+       vertical-align: top; }
+  td.mono { font-size: 8.6px; }
+
+  .flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
+  .stage { border: 1.2px solid var(--line); border-radius: 8px; padding: 7px 9px;
+           position: relative; background: #fff; min-height: 74px; }
+  .stage .n { position: absolute; top: -8px; left: 8px; background: var(--ink);
+              color: #fff; font-size: 8.5px; font-weight: 700; width: 16px;
+              height: 16px; border-radius: 50%; text-align: center; line-height: 16px; }
+  .stage h3 { margin: 2px 0 3px; font-size: 10px; }
+  .stage p { font-size: 8.6px; color: var(--mut); margin: 0; }
+  .stage.llm { border-color: var(--llm); background: #fdf7f3; }
+  .stage.cv  { border-color: var(--cv);  background: #f4f6fb; }
+  .stage.ver { border-color: var(--ver); background: #f4f8f5; }
+
+  .legend { display: flex; gap: 14px; align-items: center; margin: 8px 2px 0;
+            font-size: 9px; color: var(--mut); }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 3px;
+         margin-right: 4px; vertical-align: -1px; }
+
+  .formula { background: var(--bg-soft); border-left: 3px solid var(--cv);
+             border-radius: 0 6px 6px 0; padding: 6px 10px; font-family: "SF Mono",
+             Menlo, monospace; font-size: 9.5px; margin: 6px 0; }
+
+  .gate { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+  .gate span { border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px;
+               font-family: Menlo, monospace; font-size: 8.6px; background: #fff; }
+
+  .warn { border-left: 3px solid var(--bad); }
+  .win  { border-left: 3px solid var(--ver); }
+  .warn .kicker { color: var(--bad); }
+  svg text { font-family: "Helvetica Neue", Arial, sans-serif; }
+  .foot { color: var(--mut); font-size: 8.5px; margin-top: 10px;
+          border-top: 1px solid var(--line); padding-top: 5px; }
+</style>
+</head>
+<body>
+
+<!-- ============================== PAGE 1 ============================== -->
+<div class="page">
+  <div class="band">
+    <h1>PXRD Fetcher — how the extraction pipeline works</h1>
+    <div class="sub">A visual walkthrough of the four core modules, written for adapting the
+    approach to other figure-digitization problems (e.g. sorption isotherms).</div>
+    <div class="meta">Aaron Gao · PEAK-COF project · July 2026 · files: v2/vision.py · v2/calibrate.py · v2/extract.py · tools/quality_filter.py</div>
+  </div>
+
+  <h2>The core idea: three specialists, not one model</h2>
+  <div class="row">
+    <div class="card col" style="border-top: 3px solid var(--llm);">
+      <div class="kicker k-llm">LLM — semantics</div>
+      <p style="font-size:9.3px">Reads what only a human could: <i>where</i> the PXRD panels are,
+      what the axes mean, how many curves overlap, which legend label belongs to which color —
+      and drops a <b>coarse anchor polyline</b> on each curve.</p>
+    </div>
+    <div class="card col" style="border-top: 3px solid var(--cv);">
+      <div class="kicker k-cv">Classical CV — precision</div>
+      <p style="font-size:9.3px">Deterministic pixel work: finds the plot frame, tick marks and
+      curve ink, then <b>snaps the LLM's rough guess onto real pixels</b>. Reproducible, fast,
+      no hallucination possible.</p>
+    </div>
+    <div class="card col" style="border-top: 3px solid var(--ver);">
+      <div class="kicker k-ver">Verification — honesty</div>
+      <p style="font-size:9.3px">Every trace is scored <b>against the original image pixels</b>
+      (never against its own output — no circularity). Fails the gates &rarr; the curve is
+      rejected, not shipped.</p>
+    </div>
+  </div>
+
+  <h2 style="margin-top:6px">Pipeline at a glance</h2>
+  <div class="flow">
+    <div class="stage llm"><span class="n">1</span><h3>Locate panels</h3>
+      <p>LLM scans PDF pages, returns bounding boxes of PXRD panels + captions.</p></div>
+    <div class="stage cv"><span class="n">2</span><h3>Adaptive re-render</h3>
+      <p>Panel re-rendered from vector PDF at the DPI that makes it ~1500&nbsp;px wide
+      (clamped 220–900 DPI). Small inset &rarr; high DPI.</p></div>
+    <div class="stage llm"><span class="n">3</span><h3>Deep read</h3>
+      <p>LLM reads axis titles, tick values, series list (color, label, material)
+      and drops anchor points along every curve.</p></div>
+    <div class="stage cv"><span class="n">4</span><h3>Reframe check</h3>
+      <p>If curve ink hugs the crop edge, the crop was off — shift &amp; re-render once
+      (self-correcting).</p></div>
+    <div class="stage cv"><span class="n">5</span><h3>Frame &amp; ticks</h3>
+      <p>Evidence-scored plot-frame detection (VERIFIED vs OPEN edges) + x-tick pixel
+      centers on a regular grid.</p></div>
+    <div class="stage ver"><span class="n">6</span><h3>Calibration consensus</h3>
+      <p>Three independent pixel&rarr;2&theta; fits must agree within 0.5&deg;
+      before any is trusted.</p></div>
+    <div class="stage cv"><span class="n">7</span><h3>Snap &amp; verify</h3>
+      <p>Anchor polyline snapped to ink column-by-column; precision / recall / snap-rate
+      gates decide accept or reject.</p></div>
+    <div class="stage ver"><span class="n">8</span><h3>Postprocess &amp; QC</h3>
+      <p>Baseline (ALS), normalize, smooth; offline two-layer quality filter audits
+      every accepted curve.</p></div>
+  </div>
+  <div class="legend">
+    <span><span class="dot" style="background:var(--llm)"></span>LLM stage</span>
+    <span><span class="dot" style="background:var(--cv)"></span>deterministic CV</span>
+    <span><span class="dot" style="background:var(--ver)"></span>verification gate</span>
+    <span style="margin-left:auto">Scale: 2,370 papers &rarr; 4,664 figures &rarr; 11,445 curves (7,713 clean)</span>
+  </div>
+
+  <h2 style="margin-top:10px">Who does what</h2>
+  <table>
+    <tr><th style="width:26%">File</th><th style="width:22%">Owns</th><th>Key exports</th></tr>
+    <tr><td class="mono">v2/vision.py <span class="pill p-cv">CV</span></td>
+        <td>All pixel primitives</td>
+        <td class="mono">detect_plot_frame · finalize_frame · detect_x_tick_pixels · color_mask_for · <b>snap_trace</b> · <b>trace_fidelity</b></td></tr>
+    <tr><td class="mono">v2/calibrate.py <span class="pill p-ver">verify</span></td>
+        <td>Pixels &rarr; physical units</td>
+        <td class="mono">fit_from_pairs · pairing_candidates · fits_agree · <b>consensus_calibration</b></td></tr>
+    <tr><td class="mono">v2/extract.py <span class="pill p-cv">CV</span><span class="pill p-ver" style="margin-left:3px">verify</span></td>
+        <td>Per-curve orchestration</td>
+        <td class="mono"><b>extract_series</b> (repair ladder &rarr; gates &rarr; confidence &rarr; calibrated curve)</td></tr>
+    <tr><td class="mono">tools/quality_filter.py <span class="pill p-ver">verify</span></td>
+        <td>Offline corpus QC</td>
+        <td class="mono">series_verdict (waveform rules) · evidence_reasons (trace evidence)</td></tr>
+  </table>
+  <p class="foot">Recommended reading order: this document &rarr; <span class="mono">docs/pxrd_pipeline_slides.html</span> (interactive, stage by stage) &rarr; <span class="mono">vision.py</span> &rarr; <span class="mono">calibrate.py</span> &rarr; <span class="mono">extract.py</span> &rarr; <span class="mono">quality_filter.py</span>. The shared bundle contains no data, no API keys, no .env.</p>
+</div>
+
+<!-- ============================== PAGE 2 ============================== -->
+<div class="page">
+  <h2><span class="pill p-cv">vision.py</span>&ensp;The snap: from rough LLM guess to pixel truth</h2>
+  <p style="max-width:96%">The LLM is good at <i>"the red curve goes roughly here"</i> and bad at
+  <i>"y = 312.4 px"</i>. So the LLM only provides a coarse polyline; <code>snap_trace()</code> walks every
+  pixel column and pulls that guess onto the actual ink:</p>
+
+  <svg viewBox="0 0 740 200" style="width:100%; margin:4px 0 2px">
+    <!-- plot area -->
+    <rect x="10" y="8" width="470" height="180" fill="#fafbfd" stroke="#d9dce3"/>
+    <!-- real ink curve: noisy band -->
+    <path d="M 20 160 C 60 158, 80 150, 100 120 C 112 95, 118 40, 130 38 C 142 40, 150 95, 165 120
+             C 185 148, 230 152, 270 150 C 300 149, 310 138, 325 132 C 340 126, 355 140, 380 146
+             C 420 152, 450 154, 470 154"
+          fill="none" stroke="#8a8f9c" stroke-width="7" stroke-linecap="round" opacity="0.85"/>
+    <!-- LLM anchor polyline (offset) -->
+    <path d="M 25 148 L 95 132 L 130 55 L 170 128 L 250 140 L 325 122 L 400 140 L 468 145"
+          fill="none" stroke="#b3541e" stroke-width="2" stroke-dasharray="5 3"/>
+    <circle cx="25" cy="148" r="3" fill="#b3541e"/><circle cx="95" cy="132" r="3" fill="#b3541e"/>
+    <circle cx="130" cy="55" r="3" fill="#b3541e"/><circle cx="170" cy="128" r="3" fill="#b3541e"/>
+    <circle cx="250" cy="140" r="3" fill="#b3541e"/><circle cx="325" cy="122" r="3" fill="#b3541e"/>
+    <circle cx="400" cy="140" r="3" fill="#b3541e"/><circle cx="468" cy="145" r="3" fill="#b3541e"/>
+    <!-- search window at one column -->
+    <rect x="286" y="108" width="10" height="62" fill="#1f3b73" opacity="0.14" stroke="#1f3b73" stroke-width="1"/>
+    <line x1="291" y1="108" x2="291" y2="170" stroke="#1f3b73" stroke-width="0.8" stroke-dasharray="2 2"/>
+    <circle cx="291" cy="139" r="3.5" fill="#b3541e"/>
+    <circle cx="291" cy="150" r="4" fill="#1f3b73"/>
+    <line x1="291" y1="139" x2="291" y2="150" stroke="#1f3b73" stroke-width="1.6"/>
+    <!-- labels -->
+    <text x="140" y="30" font-size="10" fill="#b3541e" font-weight="700">LLM anchor polyline (coarse)</text>
+    <text x="20" y="182" font-size="10" fill="#6b7080">real curve ink (mask)</text>
+    <text x="302" y="120" font-size="9" fill="#1f3b73">search window &plusmn;4.5% of plot height</text>
+    <text x="302" y="158" font-size="9" fill="#1f3b73" font-weight="700">snapped: weighted centroid of ink</text>
+    <!-- right: algorithm steps -->
+    <g transform="translate(497 6)">
+      <rect x="0" y="0" width="238" height="188" rx="8" fill="#f4f5f8"/>
+      <text x="12" y="20" font-size="10.5" font-weight="700" fill="#1a1d24">Per pixel column x:</text>
+      <text x="12" y="40" font-size="9.3" fill="#3a3f4c">1&#8194;interpolate anchor &rarr; expected y</text>
+      <text x="12" y="57" font-size="9.3" fill="#3a3f4c">2&#8194;collect ink pixels within the window</text>
+      <text x="12" y="74" font-size="9.3" fill="#3a3f4c">3&#8194;snap to distance-weighted centroid</text>
+      <text x="22" y="92" font-size="9" font-family="Menlo" fill="#1f3b73">w = 1 / (1 + (d / (win/2))&#178;)</text>
+      <text x="12" y="112" font-size="9.3" fill="#3a3f4c">4&#8194;suppress isolated jumps</text>
+      <text x="22" y="128" font-size="9" font-family="Menlo" fill="#1f3b73">5-pt median · max(6px, 5% h)</text>
+      <text x="12" y="148" font-size="9.3" fill="#3a3f4c">5&#8194;trim unsnapped head/tail runs —</text>
+      <text x="22" y="163" font-size="9.3" fill="#3a3f4c">never fabricate data where the</text>
+      <text x="22" y="177" font-size="9.3" fill="#3a3f4c">figure has no ink</text>
+    </g>
+  </svg>
+  <p style="font-size:9.3px; color:var(--mut)">The centroid weighting resists grabbing a neighboring
+  curve: ink near the anchor dominates, far ink is discounted quadratically. This is what makes
+  overlapping multi-curve figures tractable — and it transfers unchanged to hysteresis loops.</p>
+
+  <div class="row" style="margin-top:8px">
+    <div class="card col">
+      <div class="kicker k-cv">Also in vision.py — frame detection</div>
+      <p style="font-size:9.3px"><code>detect_plot_frame</code> + <code>finalize_frame</code> score long
+      dark pixel runs as axis candidates. Each edge is tagged <b>VERIFIED</b> (a real drawn line)
+      or <b>OPEN</b> (no line there — publication styles with only left+bottom spines).
+      Downstream code trusts VERIFIED edges more. Ticks: <code>detect_x_tick_pixels</code> finds
+      short stubs under the bottom edge, then <code>_regularize_tick_grid</code> keeps only centers
+      on an arithmetic grid (snap tolerance 0.27 of the spacing).</p>
+    </div>
+    <div class="card col">
+      <div class="kicker k-ver">Also in vision.py — the honesty metric</div>
+      <p style="font-size:9.3px"><code>trace_fidelity</code> compares the final trace against the
+      <b>original ink mask</b>:</p>
+      <p style="font-size:9.3px; margin-top:3px">
+      <b>precision</b> — of the columns I traced, how many sit on real ink?<br>
+      <b>recall</b> — of the columns where ink is <i>expected</i>, how many did I explain?<br>
+      <b>snap rate</b> — how often did the snap actually find pixels?</p>
+      <p style="font-size:9.3px; margin-top:3px; color:var(--mut)">Scoring against the source image
+      (not the model's own output) is what keeps the check non-circular — but the <i>reference frame</i>
+      matters as much as the pixels. See the case study below.</p>
+    </div>
+  </div>
+
+  <div class="card warn" style="margin-top:2px">
+    <div class="kicker">&#9888; Case study — a circularity trap worth learning from</div>
+    <div class="row" style="margin:4px 0 0">
+      <div class="col" style="flex:1.15">
+        <p style="font-size:9.2px; margin-bottom:4px">Recall is supposed to answer <i>"did I explain
+        the ink that is there?"</i> The original implementation measured it inside a band around
+        <b>the finished trace</b>, and skipped columns the trace had abandoned (<span class="mono">y = NaN</span>).
+        Both choices are circular: ink the trace never went near could not enter the denominator.
+        Two consequences, neither visible without testing the metric itself:</p>
+        <p style="font-size:9.2px; margin:0 0 4px">
+        <b>1.</b> Since <span class="mono">tol &lt; band</span>, <span class="mono">recall &ge; precision</span> became an algebraic
+        identity — verified across all <b>11,445 curves: zero exceptions</b>. The
+        <span class="mono">recall &ge; 0.60</span> gate was dead code that never once rejected a curve.<br>
+        <b>2.</b> Worse, it inverted the incentive: <b>the more of a curve a trace abandoned, the
+        higher it scored.</b></p>
+        <p style="font-size:9.2px; margin:0"><b>Fix:</b> anchor the denominator on the LLM polyline
+        (which spans the whole curve) and let abandoned columns count against you. Legitimate
+        trimming stays free — where the anchor sits on blank canvas there is no ink to explain.</p>
+      </div>
+      <div class="col" style="flex:0.85">
+        <table style="font-size:8.6px">
+          <tr><th>Trace covering…</th><th>recall<br><span style="font-weight:400">before</span></th><th>recall<br><span style="font-weight:400">after</span></th></tr>
+          <tr><td>100% (correct)</td><td class="mono">0.991</td><td class="mono">0.991</td></tr>
+          <tr><td>50% of the curve</td><td class="mono">0.983</td><td class="mono">0.491</td></tr>
+          <tr><td>25% of the curve</td><td class="mono">0.965</td><td class="mono">0.236</td></tr>
+          <tr><td><b>10% of the curve</b></td><td class="mono" style="color:var(--bad)"><b>1.000</b></td><td class="mono" style="color:var(--ver)"><b>0.092</b></td></tr>
+        </table>
+        <p style="font-size:8.5px; color:var(--mut); margin-top:5px">A trace that threw away 90% of
+        the data scored a <b>perfect 1.0</b>. After the fix, recall tracks coverage.</p>
+        <p style="font-size:8.8px; margin-top:5px"><b>The transferable lesson:</b> a verification
+        metric is code too, and it needs its own adversarial test — feed it a deliberately
+        fabricated and a deliberately truncated trace and confirm it screams. Ours had 10 tests;
+        none did this.</p>
+      </div>
+    </div>
+  </div>
+  <p class="foot">Continued overleaf: the pixel primitives underneath the snap — frame topology, tick regularization, ink separation, color masks.</p>
+</div>
+
+<!-- ============================== PAGE 3 ============================== -->
+<div class="page">
+  <h2><span class="pill p-cv">vision.py</span>&ensp;The pixel primitives underneath</h2>
+  <p style="max-width:96%">Everything above depends on three deterministic measurements made before
+  any curve is traced: <i>where is the plot box</i>, <i>where are the ticks</i>, and <i>which pixels
+  are curve ink</i>. Each is scored on evidence rather than assumed.</p>
+
+  <div class="row" style="margin-top:8px">
+    <div class="card col">
+      <div class="kicker k-cv">Frame topology — VERIFIED vs OPEN edges</div>
+      <svg viewBox="0 0 340 96" style="width:100%">
+        <rect x="8" y="10" width="130" height="62" fill="#fafbfd" stroke="#1f3b73" stroke-width="2"/>
+        <text x="18" y="88" font-size="8.5" fill="#3a3f4c">full box: 4 &times; VERIFIED</text>
+        <g>
+          <line x1="188" y1="10" x2="318" y2="10" stroke="#b6bcc9" stroke-width="1.4" stroke-dasharray="4 3"/>
+          <line x1="318" y1="10" x2="318" y2="72" stroke="#b6bcc9" stroke-width="1.4" stroke-dasharray="4 3"/>
+          <line x1="188" y1="10" x2="188" y2="72" stroke="#1f3b73" stroke-width="2.2"/>
+          <line x1="188" y1="72" x2="318" y2="72" stroke="#1f3b73" stroke-width="2.2"/>
+          <text x="192" y="88" font-size="8.5" fill="#3a3f4c">L-spines: 2 VERIFIED + 2 OPEN</text>
+          <text x="224" y="26" font-size="8" fill="#8a90a0">OPEN (inferred)</text>
+        </g>
+      </svg>
+      <p style="font-size:8.9px; margin-top:3px">Long dark pixel runs are scored as edge candidates;
+      each edge is tagged by whether a real drawn line supports it. Spine-only publication styles
+      are recovered by <code>_frame_from_bottom_line</code>: find the x-axis line, infer the rest
+      from ink extent. Downstream calibration weights VERIFIED edges more.</p>
+    </div>
+    <div class="card col">
+      <div class="kicker k-cv">Tick regularization — only arithmetic grids survive</div>
+      <svg viewBox="0 0 340 96" style="width:100%">
+        <line x1="12" y1="40" x2="328" y2="40" stroke="#1a1d24" stroke-width="2"/>
+        <g stroke="#4a7c59" stroke-width="2.2">
+          <line x1="30" y1="40" x2="30" y2="52"/><line x1="90" y1="40" x2="90" y2="52"/>
+          <line x1="150" y1="40" x2="150" y2="52"/><line x1="210" y1="40" x2="210" y2="52"/>
+          <line x1="270" y1="40" x2="270" y2="52"/><line x1="330" y1="40" x2="330" y2="52" transform="translate(-4 0)"/>
+        </g>
+        <line x1="184" y1="40" x2="184" y2="52" stroke="#a33327" stroke-width="2.2"/>
+        <text x="177" y="66" font-size="9.5" fill="#a33327" font-weight="700">&times;</text>
+        <path d="M 30 24 L 90 24" stroke="#7b8194" stroke-width="1"/>
+        <text x="52" y="20" font-size="8" fill="#7b8194">&Delta;</text>
+        <path d="M 90 24 L 150 24" stroke="#7b8194" stroke-width="1"/>
+        <text x="112" y="20" font-size="8" fill="#7b8194">&Delta;</text>
+        <text x="14" y="88" font-size="8.5" fill="#3a3f4c">legend stub / stray mark rejected: &gt;0.27&middot;&Delta; off the grid</text>
+      </svg>
+      <p style="font-size:8.9px; margin-top:3px"><code>_regularize_tick_grid</code> keeps only tick
+      centers that sit within 27% of one spacing of a common arithmetic grid — stray marks, minor
+      ticks and legend stubs fall out before any value is paired.</p>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card col">
+      <div class="kicker k-cv">Ink separation (build_curve_foreground)</div>
+      <div class="formula" style="margin:4px 0 6px">bg = P75(gray)&ensp;·&ensp;ink = gray &lt; max(80, bg&minus;45)&ensp;·&ensp;fg = ink &cup; (S&gt;60 &amp; gray&lt;235)&ensp;&minus;&ensp;text boxes</div>
+      <p style="font-size:9.1px">Background level is estimated from the image itself (75th
+      percentile), so faded scans and gray-tinted panels still separate. OCR text boxes are
+      punched out of the mask. <b>Frame strokes are deliberately kept</b>: flat PXRD baselines hug
+      — often overlap — the bottom axis, and deleting border bands would delete real data. The
+      anchor-centered snap weighting is what keeps axis lines from hijacking a trace instead.</p>
+    </div>
+    <div class="card col">
+      <div class="kicker k-cv">Color vocabulary (color_mask_for)</div>
+      <svg viewBox="0 0 340 54" style="width:100%">
+        <rect x="4"   y="6" width="30" height="16" fill="#c93a30"/><text x="6"   y="34" font-size="7.2" fill="#5c6270">red &le;8|&ge;172</text>
+        <rect x="36"  y="6" width="34" height="16" fill="#dd8a2e"/><text x="38"  y="46" font-size="7.2" fill="#5c6270">orange 8–22</text>
+        <rect x="72"  y="6" width="36" height="16" fill="#cfc12f"/><text x="74"  y="34" font-size="7.2" fill="#5c6270">yellow 22–38</text>
+        <rect x="110" y="6" width="52" height="16" fill="#3f9b4f"/><text x="116" y="46" font-size="7.2" fill="#5c6270">green 38–85</text>
+        <rect x="164" y="6" width="26" height="16" fill="#2fa8b5"/><text x="160" y="34" font-size="7.2" fill="#5c6270">cyan 85–100</text>
+        <rect x="192" y="6" width="44" height="16" fill="#2f5fc4"/><text x="196" y="46" font-size="7.2" fill="#5c6270">blue 100–130</text>
+        <rect x="238" y="6" width="38" height="16" fill="#8a4fc4"/><text x="236" y="34" font-size="7.2" fill="#5c6270">purple 130–155</text>
+        <rect x="278" y="6" width="30" height="16" fill="#c44fae"/><text x="272" y="46" font-size="7.2" fill="#5c6270">magenta 155–172</text>
+        <rect x="310" y="6" width="26" height="16" fill="#1a1d24"/><text x="314" y="34" font-size="7.2" fill="#5c6270">black</text>
+      </svg>
+      <p style="font-size:9.1px; margin-top:2px">The LLM names each curve's color in plain English;
+      the mask is a fixed OpenCV-HSV hue window (chroma S&gt;60, V&gt;40), plus luminance rules for
+      black / gray / brown. <span class="mono">color mask &cap; foreground</span> is rung 1 of the
+      repair ladder — the strictest, cleanest pixel set for multi-curve figures.</p>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card col win">
+      <div class="kicker" style="color:var(--ver)">Persist the model's raw geometry from day one</div>
+      <p style="font-size:9.1px">For most of this project, <span class="mono">result.json</span> stored
+      each curve's metadata, evidence and final data — but <b>not the LLM anchor polyline or the
+      chosen frame</b>. Calibration could be replayed offline; tracing could not, so re-scoring a
+      curve meant re-asking the model (an API call), and offline audits that re-derived the frame
+      sometimes got a different one, misaligning sharp peaks by a few pixels.</p>
+      <p style="font-size:9.1px; margin-top:3px">Both are persisted now
+      (<span class="mono">SeriesResult.anchor_points</span>, <span class="mono">FigureResult.frame_bbox</span>) —
+      they cost a few hundred bytes and make every downstream metric re-derivable for free.
+      <b>Build this in from day one</b>; retrofitting it after a corpus run means the old corpus
+      stays unreplayable.</p>
+    </div>
+    <div class="card col">
+      <div class="kicker k-cv">Why these primitives, in this order</div>
+      <p style="font-size:9.1px">Each stage narrows what the next can get wrong:</p>
+      <p style="font-size:9.1px; margin-top:3px">
+      <b>frame</b> bounds where data can exist &rarr; <b>ticks</b> only mean something inside a known
+      frame &rarr; <b>foreground</b> excludes text/legend so the snap cannot latch onto a label
+      &rarr; <b>color mask</b> narrows to one series so overlapping curves stay separable.</p>
+      <p style="font-size:9.1px; margin-top:3px">Get the frame wrong and every later stage inherits
+      the error silently — which is why frame edges carry VERIFIED/OPEN evidence rather than being
+      assumed, and why an unsupported frame is grounds to quarantine the figure rather than proceed
+      with a guess.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== PAGE 3 ============================== -->
+<div class="page">
+  <h2><span class="pill p-ver">calibrate.py</span>&ensp;Calibration: three witnesses must agree</h2>
+  <p style="max-width:96%">Converting pixels to 2&theta; is where silent catastrophes live — one
+  misread tick label shifts every peak. So no single reading is ever trusted: three independent
+  sources each produce a linear fit <span class="mono">2&theta; = a·x&nbsp;+&nbsp;b</span>, and fits
+  only count when they <b>agree within 0.5&deg; everywhere across the plot width</b>.</p>
+
+  <svg viewBox="0 0 740 178" style="width:100%; margin:6px 0">
+    <!-- three source cards -->
+    <g>
+      <rect x="4" y="6" width="212" height="64" rx="8" fill="#fdf7f3" stroke="#b3541e" stroke-width="1.2"/>
+      <text x="14" y="24" font-size="10" font-weight="700" fill="#b3541e">A · Tick pairing</text>
+      <text x="14" y="40" font-size="8.8" fill="#3a3f4c">CV tick pixels &times; OCR/LLM tick values;</text>
+      <text x="14" y="53" font-size="8.8" fill="#3a3f4c">arithmetic-grid check; robust OLS with</text>
+      <text x="14" y="66" font-size="8.8" fill="#3a3f4c">median-residual outlier rejection</text>
+    </g>
+    <g>
+      <rect x="4" y="76" width="212" height="44" rx="8" fill="#fdf7f3" stroke="#b3541e" stroke-width="1.2"/>
+      <text x="14" y="92" font-size="10" font-weight="700" fill="#b3541e">B · Axis span</text>
+      <text x="14" y="105" font-size="8.8" fill="#3a3f4c">LLM-declared axis min/max stretched</text>
+      <text x="14" y="116" font-size="8.8" fill="#3a3f4c">across the detected frame edges</text>
+    </g>
+    <g>
+      <rect x="4" y="126" width="212" height="44" rx="8" fill="#fdf7f3" stroke="#b3541e" stroke-width="1.2"/>
+      <text x="14" y="142" font-size="10" font-weight="700" fill="#b3541e">C · OCR arbitration points</text>
+      <text x="14" y="155" font-size="8.8" fill="#3a3f4c">Independent OCR of printed numbers used</text>
+      <text x="14" y="166" font-size="8.8" fill="#3a3f4c">as tie-breaker when A and B disagree</text>
+    </g>
+    <!-- arrows -->
+    <path d="M 220 38 C 250 38, 255 70, 285 82" fill="none" stroke="#7b8194" stroke-width="1.4"/>
+    <path d="M 220 98 L 285 92" fill="none" stroke="#7b8194" stroke-width="1.4"/>
+    <path d="M 220 148 C 250 148, 255 112, 285 100" fill="none" stroke="#7b8194" stroke-width="1.4"/>
+    <!-- agreement gate -->
+    <g>
+      <rect x="288" y="58" width="180" height="66" rx="8" fill="#f4f8f5" stroke="#4a7c59" stroke-width="1.4"/>
+      <text x="300" y="78" font-size="10" font-weight="700" fill="#4a7c59">Agreement gate</text>
+      <text x="300" y="94" font-size="9" font-family="Menlo" fill="#1a1d24">max|&Delta;2&theta;| &lt; 0.5&deg;</text>
+      <text x="300" y="108" font-size="8.8" fill="#3a3f4c">evaluated at 24 points across</text>
+      <text x="300" y="119" font-size="8.8" fill="#3a3f4c">the full plot width</text>
+    </g>
+    <path d="M 472 91 L 502 91" fill="none" stroke="#7b8194" stroke-width="1.6"/>
+    <polygon points="502,86 512,91 502,96" fill="#7b8194"/>
+    <!-- output -->
+    <g>
+      <rect x="514" y="42" width="222" height="98" rx="8" fill="#f4f6fb" stroke="#1f3b73" stroke-width="1.4"/>
+      <text x="526" y="62" font-size="10" font-weight="700" fill="#1f3b73">Consensus fit + evidence</text>
+      <text x="526" y="79" font-size="8.8" fill="#3a3f4c">chosen slope/intercept, per-source RMSE,</text>
+      <text x="526" y="92" font-size="8.8" fill="#3a3f4c">which sources agreed, and a calibrated</text>
+      <text x="526" y="105" font-size="8.8" fill="#3a3f4c">2&theta; uncertainty attached to every curve.</text>
+      <text x="526" y="124" font-size="8.8" fill="#6b7080">No consensus &rarr; figure quarantined,</text>
+      <text x="526" y="135" font-size="8.8" fill="#6b7080">not silently mis-calibrated.</text>
+    </g>
+  </svg>
+
+  <div class="row">
+    <div class="card col">
+      <div class="kicker k-cv">Robust fit (fit_from_pairs)</div>
+      <p style="font-size:9.3px">Up to two rounds: fit OLS &rarr; if the worst point's residual exceeds
+      <span class="mono">max(0.3&deg;, 3&times;median residual)</span>, drop it and refit. The median—not the
+      RMSE—sets the scale, because one corrupted OCR digit drags OLS so far it would mask itself.</p>
+    </div>
+    <div class="card col">
+      <div class="kicker k-ver">Physics plausibility windows</div>
+      <p style="font-size:9.3px">A fit is discarded unless the calibrated axis lands in a physically
+      sane window, evaluated over the <i>data extent</i> (frame edges can overshoot on multi-panel
+      figures):</p>
+      <div class="gate">
+        <span>-5&deg; &le; 2&theta;<sub>lo</sub></span>
+        <span>2&theta;<sub>hi</sub> &le; 130&deg;</span>
+        <span>1.5&deg; &le; span &le; 135&deg;</span>
+      </div>
+      <p style="font-size:8.8px; color:var(--mut); margin-top:4px">&#9888; These constants are the
+      PXRD-specific prior — the first thing to swap for a different figure type (isotherms:
+      P/P&#8320; &isin; [0,1], uptake &ge; 0, log-axis option).</p>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card col">
+      <div class="kicker k-cv">Worked example</div>
+      <p style="font-size:9.1px">Four ticks detected at pixels 100 / 300 / 500 / 700; OCR reads
+      5 / 15 / 25 / 35:</p>
+      <div class="formula" style="margin:5px 0">slope = 10&deg; / 200 px = 0.05 &deg;/px&ensp;&rarr;&ensp;2&theta;(x) = 0.05&middot;x + 0&deg;&ensp;&rarr;&ensp;2&theta;(412 px) = 20.6&deg;</div>
+      <p style="font-size:9.1px">Every downstream data point is just this line evaluated at a
+      column index — which is why one wrong pairing corrupts <i>everything</i>, and why the
+      consensus gate exists.</p>
+    </div>
+    <div class="card col">
+      <div class="kicker k-cv">When counts don't match (pairing_candidates)</div>
+      <p style="font-size:9.1px">OCR often reads 4 values under 5 ticks (one label clipped or
+      unreadable). Rather than guess, <b>every plausible alignment</b> of values onto ticks becomes
+      a candidate pairing; a candidate survives only if its values form an arithmetic sequence
+      (relative tolerance 8%) and its fit passes the physics window. The agreement gate then picks
+      among survivors — alignment errors produce wildly different slopes, so wrong candidates
+      almost never find a second witness.</p>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card col">
+      <div class="kicker k-cv">Why the y-axis is deliberately NOT calibrated</div>
+      <p style="font-size:9.1px">Powder intensities are published in arbitrary units, stacked with
+      arbitrary offsets, and scaled per journal style — a y-axis number carries no physical meaning
+      across figures. The pipeline therefore records <b>relative intensity only</b> (per-curve
+      normalized after baseline removal).</p>
+      <div class="gate" style="margin-top:5px">
+        <span>within-curve shape: trusted</span>
+        <span>cross-curve absolute intensity: never claimed</span>
+      </div>
+    </div>
+    <div class="card col">
+      <div class="kicker k-ver">Failure &rarr; response ladder</div>
+      <table style="font-size:8.8px">
+        <tr><th>Situation</th><th>Response</th></tr>
+        <tr><td>One OCR digit corrupted</td><td>robust fit drops it (median-residual rule)</td></tr>
+        <tr><td>Tick fit vs axis-span fit disagree &gt;0.5&deg;</td><td>OCR arbitration points break the tie</td></tr>
+        <tr><td>Still no two sources agreeing</td><td>figure <b>quarantined</b> with reasons — never shipped mis-calibrated</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== PAGE 4 ============================== -->
+<div class="page">
+  <h2><span class="pill p-cv">extract.py</span>&ensp;Per-curve orchestration: the repair ladder and the gates</h2>
+  <p>For each curve, <code>extract_series()</code> tries increasingly permissive pixel masks until
+  the trace passes the gates — precise first, forgiving only when needed:</p>
+
+  <svg viewBox="0 0 740 128" style="width:100%; margin:6px 0 2px">
+    <g>
+      <rect x="4" y="14" width="222" height="52" rx="8" fill="#f4f6fb" stroke="#1f3b73" stroke-width="1.3"/>
+      <text x="16" y="33" font-size="9.5" font-weight="700" fill="#1f3b73">Rung 1 — strict</text>
+      <text x="16" y="48" font-size="8.7" font-family="Menlo" fill="#3a3f4c">color mask &cap; foreground</text>
+      <text x="16" y="60" font-size="8.7" font-family="Menlo" fill="#3a3f4c">window &plusmn;4.5% h</text>
+    </g>
+    <path d="M 230 40 L 252 40" stroke="#7b8194" stroke-width="1.4"/><polygon points="252,35 261,40 252,45" fill="#7b8194"/>
+    <g>
+      <rect x="263" y="14" width="205" height="52" rx="8" fill="#f4f6fb" stroke="#1f3b73" stroke-width="1.3" stroke-dasharray="4 2"/>
+      <text x="275" y="33" font-size="9.5" font-weight="700" fill="#1f3b73">Rung 2 — colorless</text>
+      <text x="275" y="48" font-size="8.7" font-family="Menlo" fill="#3a3f4c">all-foreground ink</text>
+      <text x="275" y="60" font-size="8.7" font-family="Menlo" fill="#3a3f4c">window &plusmn;4.5% h</text>
+    </g>
+    <path d="M 472 40 L 494 40" stroke="#7b8194" stroke-width="1.4"/><polygon points="494,35 503,40 494,45" fill="#7b8194"/>
+    <g>
+      <rect x="505" y="14" width="231" height="52" rx="8" fill="#f4f6fb" stroke="#1f3b73" stroke-width="1.3" stroke-dasharray="2 2"/>
+      <text x="517" y="33" font-size="9.5" font-weight="700" fill="#1f3b73">Rung 3 — wide net</text>
+      <text x="517" y="48" font-size="8.7" font-family="Menlo" fill="#3a3f4c">all-foreground, window &plusmn;9% h</text>
+      <text x="517" y="60" font-size="8.7" font-family="Menlo" fill="#3a3f4c">(faded scans, thin lines)</text>
+    </g>
+    <text x="6" y="90" font-size="9" fill="#3a3f4c">Each rung is scored</text>
+    <text x="110" y="90" font-size="9" font-family="Menlo" fill="#1f3b73">0.4·snap + 0.4·precision + 0.2·recall</text>
+    <text x="330" y="90" font-size="9" fill="#3a3f4c">— best attempt kept; ladder exits early once all gates pass.</text>
+    <text x="6" y="110" font-size="9" fill="#6b7080">The rung used is recorded as evidence (repair_rounds), so downstream QC knows how hard the curve fought.</text>
+  </svg>
+
+  <div class="row">
+    <div class="card col" style="flex:1.25">
+      <div class="kicker k-ver">Acceptance gates (all must pass)</div>
+      <div class="gate">
+        <span>snap_rate &ge; 0.55</span>
+        <span>precision &ge; 0.70</span>
+        <span>recall &ge; 0.60</span>
+        <span>confidence &ge; 0.55</span>
+      </div>
+      <div class="formula" style="margin-top:8px">confidence = 0.30·snap + 0.30·precision + 0.25·recall + 0.15·anchor_agreement</div>
+      <p style="font-size:8.9px; color:var(--mut)">anchor_agreement penalizes traces that drifted far
+      from the LLM's polyline — if CV and LLM tell different stories, confidence drops and the
+      curve is more likely to be rejected than silently wrong.</p>
+    </div>
+    <div class="card col">
+      <div class="kicker k-cv">After acceptance</div>
+      <p style="font-size:9.3px">Pixels &rarr; calibrated 2&theta; via the consensus fit; y flipped
+      (pixel y grows downward); the trace is <b>clipped to the calibrated tick span</b> — segments
+      outside it belong to neighboring panels or hallucinated extensions. If &lt;30% of the trace
+      survives the clip, the whole curve is rejected. Then: resample at 0.02&deg;,
+      Savitzky-Golay(11,&nbsp;3) smoothing, per-curve normalization.</p>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:8px">
+    <div class="card col">
+      <div class="kicker k-ver">The evidence record every accepted curve carries</div>
+      <table style="font-size:8.7px">
+        <tr><td class="mono">snap_rate</td><td>fraction of columns where ink was actually found</td></tr>
+        <tr><td class="mono">mean_snap_residual_px</td><td>average pull distance from anchor to ink</td></tr>
+        <tr><td class="mono">pixel_precision / recall</td><td>fidelity vs the original ink mask</td></tr>
+        <tr><td class="mono">anchor_vs_final_rmsd_frac</td><td>how far the trace drifted from the LLM's guess</td></tr>
+        <tr><td class="mono">repair_rounds</td><td>which rung of the ladder finally worked</td></tr>
+        <tr><td class="mono">notes ("mask=color:red")</td><td>which pixel mask produced the accepted trace</td></tr>
+      </table>
+    </div>
+    <div class="card col">
+      <div class="kicker k-ver">Confidence, worked</div>
+      <p style="font-size:9.1px">A clean single-curve figure:</p>
+      <div class="formula" style="margin:4px 0">0.30&middot;0.92 + 0.30&middot;0.88 + 0.25&middot;0.75 + 0.15&middot;0.85 = <b>0.86</b> &#10003;</div>
+      <p style="font-size:9.1px">A curve that only half-snapped:</p>
+      <div class="formula" style="margin:4px 0">snap 0.58 &#10003; &middot; prec 0.71 &#10003; &middot; recall 0.45 &#10007; &rarr; rejected</div>
+      <p style="font-size:8.9px; color:var(--mut)">Gates are AND-ed: a good composite score cannot
+      buy back a failed individual gate.</p>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card col">
+      <div class="kicker k-ver">Rejection taxonomy — what each reason usually means</div>
+      <table style="font-size:8.7px">
+        <tr><th>reject_reason</th><th>Typical cause</th></tr>
+        <tr><td class="mono">anchor polyline too short</td><td>LLM saw a legend swatch or axis label as a "curve"</td></tr>
+        <tr><td class="mono">no usable pixel mask</td><td>declared color absent from panel (mislabeled legend)</td></tr>
+        <tr><td class="mono">fidelity below threshold (…)</td><td>heavy curve overlap, dashed/dotted lines, watermark scans</td></tr>
+        <tr><td class="mono">only N% inside calibrated window</td><td>trace ran into a neighboring panel or hallucinated extension</td></tr>
+      </table>
+    </div>
+    <div class="card col">
+      <div class="kicker k-cv">Postprocess choices (why these, not others)</div>
+      <p style="font-size:9.1px"><b>ALS baseline</b> (&lambda;=10&#8311;, p=0.01): the asymmetry
+      p&rarr;0 makes the fitted baseline hug the <i>underside</i> of the signal — peaks are
+      preserved, broad background leaves. Stiff &lambda; keeps genuine amorphous humps in the
+      data rather than in the baseline.<br>
+      <b>Savitzky-Golay(11, 3)</b>: fits local cubics, so peak heights and widths survive far
+      better than under a moving average — critical when FWHM is a scientific output, not a
+      nuisance.<br>
+      <b>0.02&deg; resample</b>: uniform grid, comparable across all 11,445 curves.</p>
+    </div>
+  </div>
+
+  <div class="card soft" style="margin-top:8px">
+    <div class="kicker k-ver">Design rule worth stealing</div>
+    <p style="font-size:9.5px">Every rejection carries a machine-readable <i>reason</i> and every
+    acceptance carries <i>evidence</i> (snap rate, residuals, mask used, repair rounds, anchor
+    deviation). Nothing is a silent boolean. This is what made the offline quality filter — and
+    every audit since — possible without re-running the pipeline.</p>
+  </div>
+</div>
+
+<!-- ============================== PAGE 5 ============================== -->
+<div class="page">
+  <h2><span class="pill p-ver">quality_filter.py</span>&ensp;Offline QC: catching what real-time gates miss</h2>
+  <p style="max-width:96%">Real-time gates judge <i>tracing</i> quality. But some failures produce
+  beautifully-traced garbage — the tracer faithfully followed the wrong thing (an axis, a grid
+  line, a neighboring curve's tail). Those show up as <b>waveform pathologies</b> in the exported
+  CSV, so a second, purely offline layer re-reads every accepted curve:</p>
+
+  <svg viewBox="0 0 740 150" style="width:100%; margin:6px 0 2px">
+    <!-- four waveform glyph cards -->
+    <g>
+      <rect x="4" y="6" width="176" height="118" rx="8" fill="#fff" stroke="#a33327" stroke-width="1.2"/>
+      <text x="14" y="24" font-size="9.5" font-weight="700" fill="#a33327">Plateau / step</text>
+      <path d="M 16 84 L 60 84 L 68 52 L 160 52" fill="none" stroke="#1a1d24" stroke-width="2"/>
+      <text x="14" y="106" font-size="8.2" fill="#5c6270">traced a frame edge or legend box</text>
+      <text x="14" y="117" font-size="7.8" font-family="Menlo" fill="#5c6270">&gt;1 flat level shift &rarr; reject</text>
+    </g>
+    <g>
+      <rect x="190" y="6" width="176" height="118" rx="8" fill="#fff" stroke="#a33327" stroke-width="1.2"/>
+      <text x="200" y="24" font-size="9.5" font-weight="700" fill="#a33327">Needle notch</text>
+      <path d="M 202 60 L 250 58 L 262 96 L 274 58 L 344 56" fill="none" stroke="#1a1d24" stroke-width="2"/>
+      <text x="200" y="106" font-size="8.2" fill="#5c6270">snap fell through a gap for a moment</text>
+      <text x="200" y="117" font-size="7.8" font-family="Menlo" fill="#5c6270">&gt;1 needle (amp&gt;0.12, &plusmn;4pt) &rarr; reject</text>
+    </g>
+    <g>
+      <rect x="376" y="6" width="176" height="118" rx="8" fill="#fff" stroke="#a33327" stroke-width="1.2"/>
+      <text x="386" y="24" font-size="9.5" font-weight="700" fill="#a33327">Sawtooth</text>
+      <path d="M 388 80 l 10 -14 l 8 12 l 9 -13 l 8 12 l 9 -14 l 9 13 l 9 -12 l 9 13 l 9 -13 l 9 12 l 9 -13 l 10 13 l 9 -12 l 9 12 l 10 -13"
+            fill="none" stroke="#1a1d24" stroke-width="1.8"/>
+      <text x="386" y="106" font-size="8.2" fill="#5c6270">oscillating between two curves</text>
+      <text x="386" y="117" font-size="7.8" font-family="Menlo" fill="#5c6270">reversal density &gt;3% &amp; TV&gt;20 &rarr; reject</text>
+    </g>
+    <g>
+      <rect x="562" y="6" width="174" height="118" rx="8" fill="#fff" stroke="#4a7c59" stroke-width="1.4"/>
+      <text x="572" y="24" font-size="9.5" font-weight="700" fill="#4a7c59">Healthy PXRD</text>
+      <path d="M 574 96 C 590 94, 596 90, 600 60 C 603 40, 606 36, 610 58 C 614 80, 622 90, 640 92
+               C 660 94, 668 88, 676 84 C 690 78, 700 88, 720 90" fill="none" stroke="#1a1d24" stroke-width="1.8"/>
+      <text x="572" y="106" font-size="8.2" fill="#5c6270">sharp peaks + smooth background</text>
+      <text x="572" y="117" font-size="7.8" font-family="Menlo" fill="#4a7c59">passes both layers</text>
+    </g>
+  </svg>
+
+  <div class="row" style="margin-top:6px">
+    <div class="card col">
+      <div class="kicker k-ver">Layer 1 — waveform shape rules</div>
+      <p style="font-size:9.1px">Rolling-std segmentation (window 15 pts &asymp; 0.30&deg;;
+      "flat" &lt; 0.004) finds plateaus &ge;20 pts; level shifts &gt;0.10 with transitions &lt;60 pts
+      count as steps. Plus needle-notch and sawtooth detectors shown above.</p>
+    </div>
+    <div class="card col">
+      <div class="kicker k-ver">Layer 2 — tracing evidence rules</div>
+      <p style="font-size:9.1px">Re-reads the evidence saved at extraction time with <b>stricter
+      offline thresholds</b>: precision &ge; 0.80, snap rate &ge; 0.80, mean residual &le; 15 px.
+      Curves that passed the permissive real-time gates but sit in the gray zone get filtered here.</p>
+    </div>
+    <div class="card col" style="border-top:3px solid var(--ver)">
+      <div class="kicker k-ver">Measured results</div>
+      <p style="font-size:9.1px">Calibrated on a 250-figure human-audited sample:
+      clean-set accuracy <b>94.4% &rarr; 98.5%</b>. Caught <b>11/11</b> known-bad figures held
+      out-of-sample (the <span class="mono">KNOWN_BAD</span> list in the file).</p>
+    </div>
+  </div>
+
+  <div class="card soft" style="margin-top:8px">
+    <div class="kicker k-ver">How the thresholds were set (not hand-waved)</div>
+    <p style="font-size:9.3px">A random 250-figure sample was human-verdicted (good / bad trace).
+    Thresholds were then chosen on that audit to maximize bad-curve capture at near-zero cost to
+    good curves, and validated against 11 independently known-bad figures held out-of-sample —
+    all 11 caught. Because the filter is offline (it re-reads CSVs + stored evidence, never
+    re-traces), its rules can keep evolving as new failure modes appear, at zero pipeline cost.</p>
+  </div>
+
+  <h2 style="margin-top:12px">Constants reference (the tuning surface)</h2>
+  <table>
+    <tr><th style="width:34%">Constant</th><th style="width:18%">Value</th><th>Meaning</th></tr>
+    <tr><td class="mono">window_frac (snap)</td><td class="mono">0.045 &rarr; 0.09</td><td>vertical search half-window as fraction of plot height (rung 1 &rarr; rung 3)</td></tr>
+    <tr><td class="mono">jump suppression</td><td class="mono">max(6 px, 5% h)</td><td>single-column deviations larger than this are median-repaired</td></tr>
+    <tr><td class="mono">_AGREEMENT_TOL_DEG</td><td class="mono">0.5&deg;</td><td>max |&Delta;2&theta;| for two calibration fits to count as agreeing</td></tr>
+    <tr><td class="mono">2&theta; plausibility</td><td class="mono">[-5&deg;, 130&deg;], span 1.5–135&deg;</td><td>PXRD-specific physics prior on any calibrated axis</td></tr>
+    <tr><td class="mono">gates (real-time)</td><td class="mono">0.55 / 0.70 / 0.60 / 0.55</td><td>snap / precision / recall / confidence minimums. The recall gate only began binding once the metric was fixed (p.2) — thresholds calibrated against the old, inflated recall are worth re-deriving.</td></tr>
+    <tr><td class="mono">gates (offline)</td><td class="mono">0.80 / 0.80 / 15 px</td><td>precision / snap / mean residual — stricter second pass</td></tr>
+    <tr><td class="mono">panel re-render</td><td class="mono">1500 px, 220–900 DPI</td><td>adaptive DPI so every panel is analyzed at comparable resolution</td></tr>
+    <tr><td class="mono">postprocess</td><td class="mono">ALS &lambda;=10&#8311;, p=0.01 · SavGol(11,3) · 0.02&deg;</td><td>baseline, smoothing, resample step</td></tr>
+  </table>
+</div>
+
+<!-- ============================== PAGE 6 ============================== -->
+<div class="page">
+  <h2>Adapting this to sorption isotherms — what transfers, what breaks</h2>
+  <p style="max-width:96%">The architecture (LLM semantics &rarr; CV snap &rarr; non-circular verification
+  &rarr; offline QC) is curve-type-agnostic. Four specific things deserve attention:</p>
+
+  <div class="row" style="margin-top:8px">
+    <div class="card col warn">
+      <div class="kicker">&#9888; 1 · Discrete symbols, not a continuous line</div>
+      <p style="font-size:9.3px">Isotherms are plotted as markers (circles/squares), often with gaps.
+      <code>snap_trace</code> assumes ink in (nearly) every column — snap_rate will crater on marker
+      plots. <b>Change:</b> detect marker centroids (blob detection on the color mask) and fit the
+      polyline through them, instead of per-column snapping. The anchor-weighting idea survives;
+      the column loop becomes a blob loop.</p>
+    </div>
+    <div class="card col warn">
+      <div class="kicker">&#9888; 2 · Log-scale pressure axes</div>
+      <p style="font-size:9.3px"><code>fit_from_pairs</code> is strictly linear
+      (<span class="mono">polyfit deg 1</span>) and <code>_is_arithmetic</code> validates tick values as an
+      arithmetic grid. Low-pressure isotherms use log(P/P&#8320;) axes.
+      <b>Change:</b> add a log-space fit candidate (fit px vs log&#8321;&#8320;(value)) and a
+      geometric-grid tick validator; let the consensus mechanism pick linear vs log.</p>
+    </div>
+  </div>
+  <div class="row">
+    <div class="card col warn">
+      <div class="kicker">&#9888; 3 · Physics priors are PXRD-specific</div>
+      <p style="font-size:9.3px">The plausibility windows (2&theta; &isin; [-5&deg;, 130&deg;]…) and the
+      waveform rules (sharp peaks + smooth background) encode powder-diffraction physics.
+      Isotherm equivalents: P/P&#8320; &isin; [0, 1.05], uptake &ge; 0 and (per branch)
+      <b>monotonically non-decreasing</b> — which is actually a <i>stronger</i> QC rule than
+      anything PXRD allows. A step in an isotherm is real physics (gate opening), not an artifact:
+      the plateau/step detector must be retired or inverted.</p>
+    </div>
+    <div class="card col win">
+      <div class="kicker" style="color:var(--ver)">&#10003; 4 · Hysteresis loops come for free</div>
+      <p style="font-size:9.3px">Adsorption/desorption branches overlap on the same x-range — two y
+      values per column. This looks scary but is exactly the multi-curve problem the anchor-weighted
+      snap already solves: the LLM drops one anchor polyline per branch, and the distance weighting
+      keeps each snap on its own branch. No architectural change needed.</p>
+    </div>
+  </div>
+
+  <h2 style="margin-top:12px">Suggested porting order</h2>
+  <table>
+    <tr><th style="width:6%">#</th><th style="width:34%">Step</th><th>Why first</th></tr>
+    <tr><td>1</td><td>Run the pipeline as-is on 5 isotherm figures</td><td>Baseline: see exactly which gates fail and how (the evidence fields tell you)</td></tr>
+    <tr><td>2</td><td>Swap physics priors in <span class="mono">calibrate.py</span></td><td>Small, isolated constants; unblocks calibration consensus</td></tr>
+    <tr><td>3</td><td>Marker-centroid mode in <span class="mono">vision.py</span></td><td>The one real algorithm change; everything downstream is unchanged</td></tr>
+    <tr><td>4</td><td>Log-axis fit candidate in <span class="mono">calibrate.py</span></td><td>Needed for micropore region; consensus machinery already arbitrates</td></tr>
+    <tr><td>5</td><td>Rewrite waveform QC rules in <span class="mono">quality_filter.py</span></td><td>Last — needs a corpus of traced isotherms to calibrate thresholds against</td></tr>
+  </table>
+
+  <div class="card soft" style="margin-top:10px">
+    <div class="kicker k-cv">One-line summary</div>
+    <p style="font-size:10px">Let the LLM read the figure like a chemist, let classical CV measure it
+    like an instrument, and never ship a curve that can't prove — against the original pixels —
+    that it earned its numbers.</p>
+  </div>
+  <p class="foot">Aaron Gao · PXRD Fetcher (PEAK-COF) · July 2026 · companion: docs/pxrd_pipeline_slides.html (interactive deck) · bundle excludes .env, databases, and all datasets</p>
+</div>
+
+</body>
+</html>

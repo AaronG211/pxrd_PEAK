@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pxrd-fetcher"
+version = "0.1.0"
+description = "Local-first PXRD figure extraction CLI for scientific PDFs."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "OpenAI Codex" }
+]
+dependencies = [
+  "matplotlib>=3.8",
+  "numpy>=1.26",
+  "openai>=1.54.0",
+  "opencv-contrib-python>=4.10.0.84",
+  "rapidocr-onnxruntime>=1.4.0",
+  "pillow>=10.4",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.5",
+  "pymupdf>=1.24",
+  "pytesseract>=0.3.10",
+  "scipy>=1.13",
+  "sqlmodel>=0.0.22",
+  "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+]
+
+[project.scripts]
+pxrd-fetcher = "pxrd_fetcher.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "integration: marks tests that touch sample PDFs and optional runtime dependencies",
+]
