@@ -1,79 +1,84 @@
-# v2 "Autopilot" — 全自动 PXRD 提取架构（已实现）
+# v2 "Autopilot" — Fully-Automatic PXRD Extraction Architecture (implemented)
 
-**状态:** 已实现于 `src/pxrd_fetcher/v2/`，CLI 命令 `pxrd-fetcher auto <pdf|dir>`
-**日期:** 2026-06-11
-**目标:** 彻底去除人工审阅。每张图只有两个终态：`accepted`（带量化证据链）或 `rejected`（带机器可读原因）。不存在 `review_required`。
+**Status:** implemented in `src/pxrd_fetcher/v2/`, CLI command `pxrd-fetcher auto <pdf|dir>`
+**Date:** 2026-06-11 (design snapshot)
+**Goal:** eliminate manual review entirely. Every figure has exactly two terminal states — `accepted` (with a quantified evidence chain) or `rejected` (with a machine-readable reason). There is no `review_required`.
+
+> **Note (added later):** this is a point-in-time design doc. One claim below —
+> that the recall metric is "non-circular" — turned out to be wrong: the recall
+> definition described here was banded around the trace itself and was later
+> found to be circular and fixed. See `docs/pxrd_core_modules.pdf` (the recall
+> case study) for the corrected metric. Everything else still reflects the code.
 
 ---
 
-## 1. 核心原则
+## 1. Core principle
 
-> **CV 负责像素，LLM 负责语义，确定性的像素保真度校验器做最终仲裁。**
+> **CV owns pixels, the LLM owns semantics, and a deterministic pixel-fidelity verifier is the final arbiter.**
 
-v1 的失败根源是让每个组件做它不擅长的事：手调 CV 做语义判断（哪条曲线是哪条），
-LLM 只做边缘辅助。v2 反转分工，并且**不信任任何单一来源**——每个关键量
-（标定、曲线轨迹）都由至少两个独立来源交叉验证。
+v1 failed because it made each component do what it is bad at: hand-tuned CV made semantic judgments (which curve is which), and the LLM only assisted at the margins. v2 reverses the division of labor and **trusts no single source** — every critical quantity (calibration, curve trace) is cross-validated by at least two independent sources.
 
-## 2. 流水线
+## 2. Pipeline
 
 ```
-PDF ─render(300dpi)─► 页面
-  1. locate_panels (LLM)        页面图 → PXRD 面板分数坐标框
-     └ 自适应 crop 扩展 (CV)     边界有墨水穿越 → 向该方向扩展（防切顶/切图例）
-  2. analyze_figure (LLM, 一次调用)
-     分类 + 曲线清单(颜色/标签/堆叠序) + x 轴刻度值 + plot_box 粗定位
-  3. 图框选择 (CV, 证据打分) + 拓扑自适应 finalize
-     候选 = 长横线(容许小间隙合并) → 以「刻度线 + 线下数字标签 + 框内墨水 + 尺寸」打分
-     无标签佐证的刻度只算弱证据（防 SEM 内嵌图伪刻度）
-     顶边 = 内容墨水上界(防止平坦基线冒充框线)
-     搜索范围限制在 LLM plot_box 邻域（防邻板干扰）
-     竖直边二分:「已验证框线」= 连续笔画 ≥65% 框高、位于底轴端点 ±3.5% 窄域
-       (堆叠曲线共享峰位 → 单列墨水**计数**会冒充框线，连续性测试不会)
-     或「开放边」(作者根本没画框) —— 开放边禁止发明，由三层本图证据界定:
-       底轴线物理延伸 (合并间隙 0.6%，不把 <20px 之外的邻板轴线焊进来)
-       ∩ LLM plot_box ±3% (语义问题「哪个面板是我的」只有 LLM 能答)
-       ∩ 刻度证据 ±1.4 个刻度间隔
-     所有框候选(任何来源)统一过 finalize_frame —— 单一阻塞点
-  4. 共识标定（框架阶梯: 证据选框 → hint邻域检测 → 全图检测，谁先通过信任门槛谁赢）
-     A: CV 刻度线像素位置 × LLM 刻度数值
-        配对支持小刻度子步长 k∈{1,2,5}；多解时用 OCR 点仲裁（2 个点即可裁决）
-        「标签应覆盖大部分轴跨度」作为先验
-     B: OCR (像素,数值) 对（按行聚类取最上层数字行，防轴标题/邻板泄漏）
-     A、B 各自稳健拟合（中位数残差剔除粗差）→ 全宽预测差 < 0.5° 才算共识
-     plausibility 在刻度数据范围上评估（不在框边外推处误杀）
-     分歧时 → 放大轴带 LLM 仲裁 → 仍失败 = 整图拒绝
-  5. 锚点引导追踪
-     LLM 在带红色 10×10 参考网格的图上画粗折线（每条曲线 40-80 点）
-     CV 在锚点 ±窗口内吸附到真实曲线像素（颜色掩码 → 前景掩码 → 宽窗口的修复阶梯）
-  6. 像素保真度验证（非循环！）
-     precision: 轨迹列落在真实墨水 tol 内的比例
-     recall:    锚带内真实墨水被轨迹解释的比例
-     snap_rate: 锚点附近找到像素的列比例
-  7. 决策: snap≥0.55 ∧ prec≥0.70 ∧ rec≥0.60 ∧ conf≥0.55 → accepted；否则 rejected
-     2θ 输出窗口 = 刻度范围 ±1.25 间隔 ∩ 框范围（轴线画到哪数据才可能到哪 —— 邻板泄漏的硬截断）
+PDF ─render(300dpi)─► pages
+  1. locate_panels (LLM)        page image → fractional bbox of each PXRD panel
+     └ adaptive crop expansion (CV)   ink crossing an edge → expand that way (avoid clipping tops/legends)
+  2. analyze_figure (LLM, one call)
+     classify + curve list (color/label/stacking order) + x-axis tick values + coarse plot_box
+  3. frame selection (CV, evidence-scored) + topology-adaptive finalize
+     candidates = long horizontal lines (small gaps merged) → scored by "ticks + numeric labels below the line + ink inside + size"
+     ticks without a supporting label count only as weak evidence (avoid SEM-inset false ticks)
+     top edge = upper bound of content ink (stops a flat baseline from posing as a frame line)
+     search restricted to the neighborhood of the LLM plot_box (avoid neighboring-panel interference)
+     vertical edges, two cases:
+       "VERIFIED edge" = a continuous stroke ≥65% of frame height, within a narrow ±3.5% band around the bottom-axis endpoint
+         (stacked curves share peak columns → counting single-column ink would pose as a frame line; the continuity test does not)
+       or "OPEN edge" (the author never drew a frame) — open edges are never invented; they are bounded by three layers of in-figure evidence:
+         physical extension of the bottom-axis line (merge gaps 0.6%, never weld in a neighbor's axis >20px away)
+         ∩ LLM plot_box ±3% (only the LLM can answer the semantic question "which panel is mine")
+         ∩ tick evidence ±1.4 tick intervals
+     every frame candidate (any source) goes through finalize_frame — a single choke point
+  4. consensus calibration (frame ladder: evidence-scored frame → hint-neighborhood detect → whole-crop detect; first to clear the trust bar wins)
+     A: CV tick-pixel positions × LLM tick values
+        pairing supports minor-tick substeps k∈{1,2,5}; ties broken by OCR points (2 points suffice to decide)
+        "labels should span most of the axis" as a prior
+     B: OCR (pixel, value) pairs (row-clustered to the topmost numeric row; blocks axis-title / neighbor-panel leakage)
+     A and B each fit robustly (median-residual outlier rejection) → consensus only if full-width prediction differs by < 0.5°
+     plausibility evaluated over the tick data range (no false kills from extrapolating past the frame edge)
+     on disagreement → magnified axis-strip LLM arbitration → still failing = whole figure rejected
+  5. anchor-guided tracing
+     LLM draws a coarse polyline on the image (overlaid with a red 10×10 reference grid), 40–80 points per curve
+     CV snaps to real curve pixels within a window around the anchor (repair ladder: color mask → foreground mask → wide window)
+  6. pixel-fidelity verification (see note above re: recall)
+     precision: fraction of traced columns whose y lies within tol of real ink
+     recall:    fraction of real ink within the anchor band explained by the trace
+     snap_rate: fraction of columns where pixels were found near the anchor
+  7. decision: snap≥0.55 ∧ prec≥0.70 ∧ rec≥0.60 ∧ conf≥0.55 → accepted; otherwise rejected
+     2θ output window = tick range ±1.25 intervals ∩ frame range (data can only reach where the axis was drawn — a hard cutoff against neighbor-panel leakage)
 ```
 
-## 3. 与 v1 的关键差异
+## 3. Key differences from v1
 
-| 维度 | v1 | v2 |
+| Dimension | v1 | v2 |
 |---|---|---|
-| 终态 | accepted / review_required / skipped | accepted / partial / rejected |
-| 保真度指标 | overlay_similarity（与自己的轨迹比，循环） | 与**原图像素**比的 precision/recall |
-| 标定 | OCR 单源 + 兜底像素标定（无声失败） | 双源共识 + 仲裁，失败 = 拒绝（响亮失败） |
-| 曲线追踪 | 最顶像素假设 + 颜色分离（堆叠/灰度即坏） | LLM 语义锚点 + CV 像素吸附 |
-| 面板定位 | 标题正则 + Canny 轮廓 | LLM 直接定位 + 证据驱动扩展 |
-| 不确定度 | 无 | 每点 2θ 不确定度 = 标定残差 + 像素量化 |
-| 失败模式 | 进 review 队列等人 | 自动修复阶梯 → 仍不行就带证据拒绝 |
+| Terminal states | accepted / review_required / skipped | accepted / partial / rejected |
+| Fidelity metric | overlay_similarity (compared to its own trace — circular) | precision/recall vs the **original image pixels** |
+| Calibration | single-source OCR + fallback pixel calibration (silent failure) | two-source consensus + arbitration; failure = rejection (loud failure) |
+| Curve tracing | topmost-pixel assumption + color separation (breaks on stacked/grayscale) | LLM semantic anchors + CV pixel snapping |
+| Panel location | caption regex + Canny contours | LLM direct location + evidence-driven expansion |
+| Uncertainty | none | per-point 2θ uncertainty = calibration residual + pixel quantization |
+| Failure mode | goes to a review queue for a human | automatic repair ladder → if still failing, reject with evidence |
 
-## 4. 证据链（每图 result.json）
+## 4. Evidence chain (per figure, result.json)
 
-- `calibration`: 方法、RMSE(°)、双源一致性(°)、刻度像素与数值
-- `series[].evidence`: snap_rate、pixel_precision、pixel_recall、锚点偏差、修复轮数
-- `confidence`: 0.30·snap + 0.30·prec + 0.25·rec + 0.15·锚点一致性
-- `overlay.png`: 提取轨迹直接画在原 crop 上 —— 最直观的质检物
+- `calibration`: method, RMSE (°), two-source agreement (°), tick pixels and values
+- `series[].evidence`: snap_rate, pixel_precision, pixel_recall, anchor deviation, repair rounds
+- `confidence`: 0.30·snap + 0.30·prec + 0.25·rec + 0.15·anchor agreement
+- `overlay.png`: the extracted trace drawn directly on the original crop — the most intuitive QA artifact
 
-## 5. 验收哲学
+## 5. Acceptance philosophy
 
-全自动 ≠ 全接受。**接受的数据必须可信，拒绝的数据必须有因。**
-宁可拒绝可疑图（附原因），不可让未经验证的数据混入下游。
-拒绝率本身是质量信号：某类图形系统性被拒 → 修复阶梯加一级，而不是松阈值。
+Fully-automatic ≠ accept-everything. **Accepted data must be trustworthy; rejected data must have a reason.**
+Better to reject a suspect figure (with a reason) than to let unverified data into the downstream.
+The rejection rate is itself a quality signal: if a class of figures is systematically rejected → add a rung to the repair ladder, do not loosen the threshold.
