@@ -1,3 +1,6 @@
+# NOTE: .gitignore does NOT support trailing comments on a pattern line.
+# Every comment must be on its own line, or the whole line becomes the pattern.
+
 # ── secrets — NEVER commit (this is a PUBLIC repo) ────────────────────
 .env
 .env.*
@@ -16,16 +19,23 @@ dist/
 .DS_Store
 
 # ── research data & others' datasets (large, not ours to redistribute) ─
-outputs/          # 15 GB run artifacts + pxrd.db
-data/             # Peter Walther COF extraction dataset
+# outputs/ = 15 GB run artifacts + pxrd.db
+# data/    = Peter Walther COF extraction dataset
+outputs/
+data/
 tmp/
 
-# ── copyrighted source PDFs — do not publish ──────────────────────────
-sample_papers/    # ~19 GB of journal PDFs
+# ── copyrighted source PDFs — do not publish (~19 GB of journal PDFs) ──
+sample_papers/
 
 # ── unpublished research IP (kept out of the PUBLIC repo by default) ───
 # Delete a line here if you decide that item should be public.
-output/            # generated proposal PDFs + degradation scan outputs
-proposals/         # research proposal drafts
-plan/*.docx        # research planning docs
-analysis/          # research-specific DB scan scripts
+# output/    = generated proposal PDFs + degradation scan outputs
+# proposals/ = research proposal drafts
+# analysis/  = research-specific DB scan scripts
+# log.md     = research work log with unpublished findings
+output/
+proposals/
+analysis/
+plan/*.docx
+log.md
