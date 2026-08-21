@@ -1,0 +1,13 @@
+.git
+.gitignore
+.env
+.env.example
+.DS_Store
+
+frontend
+sample_papers
+uploads
+cofs.db
+
+__pycache__/
+*.py[cod]

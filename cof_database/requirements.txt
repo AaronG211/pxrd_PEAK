@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+sqlalchemy[asyncio]
+aiosqlite
+asyncpg
+openai
+pymupdf
+python-multipart
+python-dotenv
+requests
+Pillow
+sse-starlette
