@@ -6,6 +6,8 @@ export type CurveRole =
   | "reference"
   | "unclassified";
 
+export type FigureQualityStatus = "reviewed" | "pending" | "flagged";
+
 export interface PxrdCurve {
   id: string;
   seriesId: string;
@@ -28,7 +30,7 @@ export interface PxrdFigure {
   sourceCropUrl: string;
   digitizedPlotUrl: string;
   overlayUrl: string | null;
-  qualityStatus: "reviewed" | "pending" | "flagged";
+  qualityStatus: FigureQualityStatus;
   curves: PxrdCurve[];
 }
 
@@ -43,6 +45,11 @@ export interface PaperSummary {
   figureCount: number;
   curveCount: number;
   materialCount: number;
+  materialNames: string[];
+  curveRoles: CurveRole[];
+  sampleStates: string[];
+  qualityStatuses: FigureQualityStatus[];
+  hasResolvedTitle: boolean;
 }
 
 export interface PaperDetail extends PaperSummary {

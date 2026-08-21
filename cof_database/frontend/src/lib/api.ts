@@ -1,6 +1,13 @@
 import { createClient } from "@supabase/supabase-js";
 import { DEMO_PAPERS } from "../demoData";
-import type { PaperDetail, PaperSummary, PxrdCurve, PxrdFigure } from "../types";
+import type {
+  CurveRole,
+  FigureQualityStatus,
+  PaperDetail,
+  PaperSummary,
+  PxrdCurve,
+  PxrdFigure,
+} from "../types";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
@@ -64,6 +71,126 @@ type DbPaperSummary = {
   material_count: number;
 };
 
+type DbFigureFacet = {
+  id: string;
+  paper_id: string;
+  quality_status: FigureQualityStatus;
+};
+
+type DbCurveFacet = {
+  id: string;
+  figure_id: string;
+  material_name: string | null;
+  curve_role: CurveRole;
+  sample_state: string | null;
+};
+
+type PaperFacetAccumulator = {
+  materialNames: Set<string>;
+  curveRoles: Set<CurveRole>;
+  sampleStates: Set<string>;
+  qualityStatuses: Set<FigureQualityStatus>;
+};
+
+const POSTGREST_PAGE_SIZE = 1000;
+
+function cleanFacet(value: string | null): string | null {
+  const cleaned = value?.replace(/\s+/g, " ").trim();
+  return cleaned || null;
+}
+
+function hasResolvedTitle(title: string, id: string, doi: string | null): boolean {
+  const normalize = (value: string) =>
+    value.trim().toLowerCase().replace(/^https?:\/\/(dx\.)?doi\.org\//, "").replace("/", "_");
+  const normalizedTitle = normalize(title);
+  return normalizedTitle !== normalize(id) && (!doi || normalizedTitle !== normalize(doi));
+}
+
+function emptyFacets(): PaperFacetAccumulator {
+  return {
+    materialNames: new Set(),
+    curveRoles: new Set(),
+    sampleStates: new Set(),
+    qualityStatuses: new Set(),
+  };
+}
+
+function sortedValues(values: Set<string>): string[] {
+  return [...values].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+}
+
+function summarizeFacets(facets: PaperFacetAccumulator) {
+  return {
+    materialNames: sortedValues(facets.materialNames),
+    curveRoles: [...facets.curveRoles].sort(),
+    sampleStates: sortedValues(facets.sampleStates),
+    qualityStatuses: [...facets.qualityStatuses].sort(),
+  };
+}
+
+function demoFacets(paper: PaperDetail) {
+  const facets = emptyFacets();
+  for (const figure of paper.figures) {
+    facets.qualityStatuses.add(figure.qualityStatus);
+    for (const curve of figure.curves) {
+      const material = cleanFacet(curve.materialName);
+      const state = cleanFacet(curve.sampleState);
+      if (material) facets.materialNames.add(material);
+      if (state) facets.sampleStates.add(state);
+      facets.curveRoles.add(curve.role);
+    }
+  }
+  return summarizeFacets(facets);
+}
+
+async function fetchAllPaperRows(): Promise<DbPaperSummary[]> {
+  const rows: DbPaperSummary[] = [];
+  for (let from = 0; ; from += POSTGREST_PAGE_SIZE) {
+    const { data, error } = await supabase!
+      .from("pxrd_paper_index")
+      .select("id, paper_number, doi, title, authors, journal, publication_year, figure_count, curve_count, material_count")
+      .order("paper_number")
+      .range(from, from + POSTGREST_PAGE_SIZE - 1);
+    if (error) throw error;
+    const page = (data ?? []) as DbPaperSummary[];
+    rows.push(...page);
+    if (page.length < POSTGREST_PAGE_SIZE) break;
+  }
+  return rows;
+}
+
+async function fetchAllFigureFacets(): Promise<DbFigureFacet[]> {
+  const rows: DbFigureFacet[] = [];
+  for (let from = 0; ; from += POSTGREST_PAGE_SIZE) {
+    const { data, error } = await supabase!
+      .from("pxrd_figures")
+      .select("id, paper_id, quality_status")
+      .order("id")
+      .range(from, from + POSTGREST_PAGE_SIZE - 1);
+    if (error) throw error;
+    const page = (data ?? []) as DbFigureFacet[];
+    rows.push(...page);
+    if (page.length < POSTGREST_PAGE_SIZE) break;
+  }
+  return rows;
+}
+
+async function fetchAllCurveFacets(): Promise<DbCurveFacet[]> {
+  const rows: DbCurveFacet[] = [];
+  for (let from = 0; ; from += POSTGREST_PAGE_SIZE) {
+    const { data, error } = await supabase!
+      .from("pxrd_curves")
+      .select("id, figure_id, material_name, curve_role, sample_state")
+      .order("id")
+      .range(from, from + POSTGREST_PAGE_SIZE - 1);
+    if (error) throw error;
+    const page = (data ?? []) as DbCurveFacet[];
+    rows.push(...page);
+    if (page.length < POSTGREST_PAGE_SIZE) break;
+  }
+  return rows;
+}
+
 function assetUrl(path: string | null): string {
   if (!path) return "";
   if (/^(https?:)?\//.test(path)) return path;
@@ -109,6 +236,17 @@ function mapPaper(row: DbPaper): PaperDetail {
       figure.curves.flatMap((curve) => (curve.materialName ? [curve.materialName] : [])),
     ),
   );
+  const facets = emptyFacets();
+  for (const figure of figures) {
+    facets.qualityStatuses.add(figure.qualityStatus);
+    for (const curve of figure.curves) {
+      const material = cleanFacet(curve.materialName);
+      const state = cleanFacet(curve.sampleState);
+      if (material) facets.materialNames.add(material);
+      if (state) facets.sampleStates.add(state);
+      facets.curveRoles.add(curve.role);
+    }
+  }
 
   return {
     id: row.id,
@@ -123,19 +261,44 @@ function mapPaper(row: DbPaper): PaperDetail {
     figureCount: figures.length,
     curveCount: figures.reduce((total, figure) => total + figure.curves.length, 0),
     materialCount: materialNames.size,
+    ...summarizeFacets(facets),
+    hasResolvedTitle: hasResolvedTitle(row.title, row.id, row.doi),
   };
 }
 
 export async function fetchPapers(): Promise<PaperSummary[]> {
-  if (!supabase) return DEMO_PAPERS;
+  if (!supabase) {
+    return DEMO_PAPERS.map((paper) => ({
+      ...paper,
+      ...demoFacets(paper),
+      hasResolvedTitle: hasResolvedTitle(paper.title, paper.id, paper.doi),
+    }));
+  }
 
-  const { data, error } = await supabase
-    .from("pxrd_paper_index")
-    .select("id, paper_number, doi, title, authors, journal, publication_year, figure_count, curve_count, material_count")
-    .order("paper_number");
+  const [paperRows, figureRows, curveRows] = await Promise.all([
+    fetchAllPaperRows(),
+    fetchAllFigureFacets(),
+    fetchAllCurveFacets(),
+  ]);
+  const figureToPaper = new Map(figureRows.map((figure) => [figure.id, figure.paper_id]));
+  const facetsByPaper = new Map<string, PaperFacetAccumulator>();
+  for (const row of paperRows) facetsByPaper.set(row.id, emptyFacets());
+  for (const figure of figureRows) {
+    facetsByPaper.get(figure.paper_id)?.qualityStatuses.add(figure.quality_status);
+  }
+  for (const curve of curveRows) {
+    const paperId = figureToPaper.get(curve.figure_id);
+    if (!paperId) continue;
+    const facets = facetsByPaper.get(paperId);
+    if (!facets) continue;
+    const material = cleanFacet(curve.material_name);
+    const state = cleanFacet(curve.sample_state);
+    if (material) facets.materialNames.add(material);
+    if (state) facets.sampleStates.add(state);
+    facets.curveRoles.add(curve.curve_role);
+  }
 
-  if (error) throw error;
-  return ((data ?? []) as DbPaperSummary[]).map((row) => ({
+  return paperRows.map((row) => ({
     id: row.id,
     paperNumber: row.paper_number,
     doi: row.doi,
@@ -146,6 +309,8 @@ export async function fetchPapers(): Promise<PaperSummary[]> {
     figureCount: row.figure_count,
     curveCount: row.curve_count,
     materialCount: row.material_count,
+    ...summarizeFacets(facetsByPaper.get(row.id) ?? emptyFacets()),
+    hasResolvedTitle: hasResolvedTitle(row.title, row.id, row.doi),
   }));
 }
 

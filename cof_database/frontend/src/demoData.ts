@@ -1,5 +1,10 @@
 import type { PaperDetail, PxrdCurve } from "./types";
 
+type DemoPaper = Omit<
+  PaperDetail,
+  "materialNames" | "curveRoles" | "sampleStates" | "qualityStatuses" | "hasResolvedTitle"
+>;
+
 function curve(
   seriesId: string,
   label: string,
@@ -25,7 +30,7 @@ function curve(
   };
 }
 
-export const DEMO_PAPERS: PaperDetail[] = [
+const DEMO_RECORDS: DemoPaper[] = [
   {
     id: "10.1002_adfm.201705553",
     paperNumber: "PXRD-00001",
@@ -122,3 +127,15 @@ export const DEMO_PAPERS: PaperDetail[] = [
     ],
   },
 ];
+
+export const DEMO_PAPERS: PaperDetail[] = DEMO_RECORDS.map((paper) => {
+  const curves = paper.figures.flatMap((figure) => figure.curves);
+  return {
+    ...paper,
+    materialNames: [...new Set(curves.flatMap((curve) => curve.materialName ? [curve.materialName] : []))],
+    curveRoles: [...new Set(curves.map((curve) => curve.role))],
+    sampleStates: [...new Set(curves.flatMap((curve) => curve.sampleState ? [curve.sampleState] : []))],
+    qualityStatuses: [...new Set(paper.figures.map((figure) => figure.qualityStatus))],
+    hasResolvedTitle: true,
+  };
+});

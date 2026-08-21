@@ -69,3 +69,23 @@ python3 -u scripts/import_pxrd_to_supabase.py --limit 1000 --workers 8
 The approved 1,000-paper pilot contains 1,866 figures and 3,815 clean curves.
 The command is safe to resume after interruption because existing Storage
 objects are detected and all metadata writes are idempotent upserts.
+
+## Zero-API title enrichment
+
+Most source PDFs contain reliable embedded title metadata even when the local
+paper table does not. The backfill script reads that metadata locally; it makes
+no network or model calls and records every proposed change before applying it.
+
+```bash
+# Audit only
+python3 scripts/backfill_pdf_titles.py --limit 1000
+
+# Update the local SQLite title field
+python3 scripts/backfill_pdf_titles.py --limit 1000 --apply
+
+# Synchronize only paper metadata to Supabase (no asset upload)
+python3 scripts/import_pxrd_to_supabase.py --limit 1000 --metadata-only
+```
+
+The metadata-only importer reads only `SUPABASE_URL` and
+`SUPABASE_SECRET_KEY`; it never loads or invokes a model-provider credential.

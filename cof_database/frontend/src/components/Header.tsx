@@ -11,21 +11,27 @@ export function Header() {
             Open <span className="font-light text-slate-600">PXRD</span>
           </span>
         </Link>
-        <nav className="flex items-center gap-5">
+        <nav aria-label="Primary navigation" className="flex items-center gap-3 sm:gap-5">
           <Link
             to="/"
             className="text-sm font-medium text-slate-600 transition-colors hover:text-slate-900"
           >
             Browse
           </Link>
+          <Link
+            to="/digitize"
+            className="text-sm font-medium text-slate-600 transition-colors hover:text-slate-900"
+          >
+            Digitize
+          </Link>
           <a
             href="/#about"
-            className="text-sm font-medium text-slate-600 transition-colors hover:text-slate-900"
+            className="hidden text-sm font-medium text-slate-600 transition-colors hover:text-slate-900 sm:block"
           >
             About
           </a>
           <a
-            href="https://github.com/AaronG211/cof_database"
+            href="https://github.com/AaronG211/pxrd_PEAK/tree/main/cof_database"
             target="_blank"
             rel="noreferrer"
             aria-label="GitHub"
