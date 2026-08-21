@@ -1,0 +1,235 @@
+@import "tailwindcss";
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes softFloat {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
+}
+
+@keyframes orbitSpin {
+  from {
+    transform: rotate(0deg) scale(1);
+    opacity: 0.9;
+  }
+  to {
+    transform: rotate(360deg) scale(1);
+    opacity: 0.9;
+  }
+}
+
+@keyframes skeletonPulse {
+  0% {
+    opacity: 0.52;
+    transform: scaleX(0.985);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+  100% {
+    opacity: 0.52;
+    transform: scaleX(0.985);
+  }
+}
+
+@keyframes rowReveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes chipPop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes progressPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@layer base {
+  body {
+    @apply text-slate-900 antialiased;
+    font-family: "Inter", system-ui, -apple-system, sans-serif;
+    background:
+      radial-gradient(circle at 8% -10%, rgba(125, 211, 252, 0.12), transparent 28%),
+      radial-gradient(circle at 92% 6%, rgba(110, 231, 183, 0.1), transparent 26%),
+      #f8fafc;
+  }
+}
+
+@layer components {
+  .section-container {
+    @apply max-w-7xl mx-auto px-4 sm:px-6 lg:px-8;
+  }
+
+  .card {
+    @apply bg-white border border-slate-200 rounded-xl p-6 shadow-sm transition-all duration-300 hover:shadow-lg hover:border-slate-300 flex flex-col;
+  }
+
+  .card-animate {
+    animation: fadeUp 560ms ease-out both;
+  }
+
+  .card-animate:hover {
+    transform: translateY(-4px);
+  }
+
+  .badge {
+    @apply inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-800 border border-slate-200;
+  }
+
+  .hero-surface {
+    background:
+      linear-gradient(145deg, rgba(248, 250, 252, 0.95) 5%, rgba(239, 246, 255, 0.95) 48%, rgba(236, 253, 245, 0.9) 100%);
+  }
+
+  .feature-tile {
+    @apply rounded-xl border border-slate-200/80 bg-white/60 p-4 backdrop-blur-sm transition-all duration-300;
+  }
+
+  .feature-tile:hover {
+    @apply border-slate-300 bg-white/85;
+    transform: translateY(-3px);
+  }
+
+  .reveal-up {
+    animation: fadeUp 620ms ease-out both;
+  }
+
+  .reveal-delay-1 {
+    animation-delay: 120ms;
+  }
+
+  .reveal-delay-2 {
+    animation-delay: 220ms;
+  }
+
+  .reveal-delay-3 {
+    animation-delay: 320ms;
+  }
+
+  .floating-orb {
+    animation: softFloat 8s ease-in-out infinite;
+  }
+
+  .floating-orb-delay {
+    animation-delay: 1.8s;
+  }
+
+  .strategy-loader-wrap {
+    @apply relative mx-auto h-16 w-16;
+  }
+
+  .strategy-loader-ring {
+    @apply absolute inset-0 rounded-full border-2 border-sky-200;
+    border-top-color: rgb(30 64 175 / 0.85);
+    animation: orbitSpin 900ms cubic-bezier(0.25, 1, 0.5, 1) infinite;
+  }
+
+  .strategy-loader-ring-delay {
+    @apply border-2 border-emerald-200;
+    border-top-color: rgb(5 150 105 / 0.78);
+    transform: scale(0.78);
+    animation-duration: 1100ms;
+    animation-direction: reverse;
+  }
+
+  .strategy-skeleton {
+    @apply rounded-md bg-slate-200 origin-left;
+    animation: skeletonPulse 1200ms cubic-bezier(0.25, 1, 0.5, 1) infinite;
+  }
+
+  .inventory-filter-card {
+    transition:
+      transform 260ms cubic-bezier(0.25, 1, 0.5, 1),
+      box-shadow 260ms cubic-bezier(0.25, 1, 0.5, 1),
+      border-color 260ms cubic-bezier(0.25, 1, 0.5, 1);
+  }
+
+  .inventory-filter-card:hover {
+    @apply border-slate-300 shadow-sm;
+    transform: translateY(-2px);
+  }
+
+  .inventory-select {
+    transition:
+      border-color 180ms cubic-bezier(0.25, 1, 0.5, 1),
+      box-shadow 180ms cubic-bezier(0.25, 1, 0.5, 1);
+  }
+
+  .inventory-select:focus-visible {
+    @apply border-slate-400;
+  }
+
+  .inventory-count-chip {
+    animation: chipPop 280ms cubic-bezier(0.25, 1, 0.5, 1) both;
+  }
+
+  .inventory-row > td {
+    animation: rowReveal 460ms cubic-bezier(0.25, 1, 0.5, 1) both;
+    animation-delay: calc(var(--i, 0) * 34ms);
+  }
+
+  .inventory-title-link {
+    transition: color 180ms cubic-bezier(0.25, 1, 0.5, 1);
+  }
+
+  .inventory-link-arrow {
+    transition: transform 180ms cubic-bezier(0.25, 1, 0.5, 1);
+  }
+
+  .inventory-row:hover .inventory-link-arrow {
+    transform: translateX(2px) translateY(-1px);
+  }
+
+  .progress-bar-fill {
+    transition: width 600ms cubic-bezier(0.25, 1, 0.5, 1);
+  }
+
+  .progress-pulse {
+    animation: progressPulse 2s ease-in-out infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-animate,
+  .reveal-up,
+  .floating-orb,
+  .strategy-loader-ring,
+  .strategy-skeleton,
+  .inventory-count-chip,
+  .inventory-row > td,
+  .progress-pulse {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
