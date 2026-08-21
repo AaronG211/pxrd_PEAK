@@ -52,7 +52,7 @@ def chunks(rows: list[dict[str, Any]], size: int) -> Iterable[list[dict[str, Any
         yield rows[start : start + size]
 
 
-def load_env_file(path: Path) -> None:
+def load_env_file(path: Path, allowed_keys: set[str] | None = None) -> None:
     if not path.is_file():
         return
     for raw_line in path.read_text().splitlines():
@@ -62,7 +62,7 @@ def load_env_file(path: Path) -> None:
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip().strip('"').strip("'")
-        if key:
+        if key and (allowed_keys is None or key in allowed_keys):
             os.environ.setdefault(key, value)
 
 
@@ -401,12 +401,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force-assets", action="store_true")
+    parser.add_argument(
+        "--metadata-only",
+        action="store_true",
+        help="Upsert paper metadata only; do not inspect or upload assets",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    load_env_file(Path(__file__).resolve().parents[1] / ".env")
+    load_env_file(
+        Path(__file__).resolve().parents[1] / ".env",
+        allowed_keys={"SUPABASE_URL", "SUPABASE_SECRET_KEY"},
+    )
     db_path = args.db.resolve()
     assets_root = args.assets_root.resolve()
     if not db_path.is_file():
@@ -447,6 +455,11 @@ def main() -> int:
         raise RuntimeError("SUPABASE_URL and SUPABASE_SECRET_KEY are required")
     supabase = Supabase(url, secret_key)
     supabase.verify()
+
+    if args.metadata_only:
+        supabase.upsert("pxrd_papers", papers, 200)
+        print(f"Metadata-only upsert complete for {len(papers)} papers.")
+        return 0
 
     uploaded_bytes = 0
     executor = ThreadPoolExecutor(max_workers=args.workers)
