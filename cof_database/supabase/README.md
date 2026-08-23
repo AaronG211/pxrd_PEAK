@@ -3,7 +3,8 @@
 1. Create a Supabase project.
 2. For the approved legacy reset, run `reset.sql` once after creating a backup.
 3. Run `schema.sql` in the project SQL editor.
-4. Copy the project URL and anonymous key into `frontend/.env.local`:
+4. Run `digitization_workspace.sql` to enable authenticated private job uploads.
+5. Copy the project URL and anonymous key into `cof_database/.env`:
 
    ```env
    VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
@@ -24,9 +25,24 @@ pxrd-assets/
   papers/<paper-id>/figures/<figure-id>/curves.csv
 ```
 
-The browser has read-only access. Never place a Supabase service-role key in a
-`VITE_` variable or commit it to the repository. Writes should happen through a
-trusted ingestion script or server process.
+The public database surface is read-only. Never place a Supabase service-role
+key in a `VITE_` variable or commit it to the repository. Curated writes should
+happen through a trusted ingestion script or server process.
+
+Authenticated users have a separate, private write surface:
+
+```text
+pxrd-user-uploads/<auth.uid()>/<job-id>/<random-name>.pdf
+pxrd-user-results/<auth.uid()>/<job-id>/<result-name>
+```
+
+The public `pxrd_*` tables and `pxrd-assets` bucket remain read-only. User
+uploads never become public records automatically. The authenticated browser
+can use narrow RPCs to create a quota-controlled draft, register inputs, save
+the job, and delete unprocessed private files; it cannot write worker estimates,
+actual cost, results, or completion status. `saved` is deliberately not a queue
+state. A future worker must produce a server quote and obtain explicit approval
+before a job can become `queued`.
 
 The frontend reads the lightweight `pxrd_paper_index` view on the dashboard and only
 loads nested figure/curve metadata on a paper detail page. This avoids downloading

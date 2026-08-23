@@ -1,5 +1,6 @@
-import { createClient } from "@supabase/supabase-js";
 import { DEMO_PAPERS } from "../demoData";
+import { supabase } from "./supabase";
+export { isSupabaseConfigured } from "./supabase";
 import type {
   CurveRole,
   FigureQualityStatus,
@@ -8,15 +9,6 @@ import type {
   PxrdCurve,
   PxrdFigure,
 } from "../types";
-
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
-
-export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
-
-const supabase = isSupabaseConfigured
-  ? createClient(supabaseUrl as string, supabaseAnonKey as string)
-  : null;
 
 type DbCurve = {
   id: string;

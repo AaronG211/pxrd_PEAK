@@ -1,8 +1,15 @@
 import { Navigate, Route, Routes } from "react-router-dom";
+import { useAuth } from "./auth/context";
 import { Header } from "./components/Header";
+import { AuthCallbackPage } from "./pages/AuthCallbackPage";
 import { DigitizationPlannerPage } from "./pages/DigitizationPlannerPage";
 import { HomePage } from "./pages/HomePage";
 import { PaperDetailPage } from "./pages/PaperDetailPage";
+
+function DigitizationRoute() {
+  const { user } = useAuth();
+  return <DigitizationPlannerPage key={user?.id ?? "anonymous"} />;
+}
 
 function App() {
   return (
@@ -18,7 +25,8 @@ function App() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/paper/:paperId" element={<PaperDetailPage />} />
-          <Route path="/digitize" element={<DigitizationPlannerPage />} />
+          <Route path="/digitize" element={<DigitizationRoute />} />
+          <Route path="/auth/callback" element={<AuthCallbackPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

@@ -12,6 +12,8 @@ with reconstructed traces, and downloads the curve data.
 - Side-by-side source crop and digitized plot
 - Per-figure curve inventory and CSV download
 - Supabase-ready public read model
+- Google sign-in through Supabase Auth
+- Authenticated private PDF uploads and digitization planning jobs
 - Local demo snapshot containing three real records from `pxrd_fetcher`
 
 The previous AI extraction screens are no longer part of the public product.
@@ -23,11 +25,19 @@ destructively while the database interface is being rebuilt.
 ```text
 React/Vite website
         |
-        | anonymous, read-only access
+        | anonymous public reads / authenticated private workspace
         v
 Supabase Postgres  -- paper, figure, and curve metadata
 Supabase Storage   -- source crops, digitized plots, overlays, CSV/Parquet files
 ```
+
+The private workspace is deliberately a Phase-A shell: it stores PDFs, the
+client-side cost estimate, and a hard budget cap, then leaves the job in
+`saved`. A saved job is not a queue entry: a future worker must issue a new
+server-side quote and receive explicit user approval before it can become
+`queued`. Phase A does not collect a model credential or run extraction.
+The existing legacy FastAPI backend is not the PXRD worker and must not be
+exposed as one.
 
 Dense curve points belong in Storage files rather than millions of Postgres
 rows. This keeps browsing queries small while preserving full-resolution data
@@ -47,6 +57,34 @@ and add `VITE_SUPABASE_URL` plus `VITE_SUPABASE_ANON_KEY` to the project-root
 
 Do not expose a Supabase service-role key in the frontend. Curated writes and
 bulk imports should run from a trusted local script or server environment.
+
+## Private digitization workspace
+
+After running `supabase/schema.sql`, run
+`supabase/digitization_workspace.sql` in the Supabase SQL editor. This creates:
+
+- `digitization_jobs` and `digitization_job_files`
+- private `pxrd-user-uploads` and `pxrd-user-results` buckets
+- owner-only RLS policies based on `auth.uid()`
+- narrow RPCs for quota-controlled creation, manifest registration, saving,
+  and deletion of unprocessed jobs
+
+Configure Google in Supabase Auth and allow these application redirects:
+
+```text
+https://pxrd-peak.vercel.app/auth/callback
+http://localhost:5173/auth/callback
+```
+
+The Google OAuth client secret belongs only in the Supabase provider settings.
+No Google secret, service-role key, or model-provider key belongs in a `VITE_`
+variable. The site currently accepts PDF inputs only because the production
+PXRD pipeline does not yet have a hosted image-input entrypoint.
+
+Phase A permits at most two active private jobs per user, and saved/draft jobs
+can be deleted from the website. Keep the Google OAuth application in Testing
+mode with an explicit tester list; public signup additionally requires rate
+limiting and an automatic retention/expiration process.
 
 ## Import the deterministic Free-plan pilot
 
