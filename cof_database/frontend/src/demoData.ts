@@ -2,7 +2,13 @@ import type { PaperDetail, PxrdCurve } from "./types";
 
 type DemoPaper = Omit<
   PaperDetail,
-  "materialNames" | "curveRoles" | "sampleStates" | "qualityStatuses" | "hasResolvedTitle"
+  | "materialNames"
+  | "curveRoles"
+  | "sampleStates"
+  | "qualityStatuses"
+  | "hasResolvedTitle"
+  | "publicationStatus"
+  | "publicationStatusNoticeDoi"
 >;
 
 function curve(
@@ -53,7 +59,14 @@ const DEMO_RECORDS: DemoPaper[] = [
         sourceCropUrl: "/demo/adfm-201705553-source.png",
         digitizedPlotUrl: "/demo/adfm-201705553-digitized.png",
         overlayUrl: null,
-        qualityStatus: "reviewed",
+        qualityStatus: "pending",
+        verificationStatus: null,
+        axisAgreementDeg: null,
+        axisRmseDeg: null,
+        axisTickCount: null,
+        seriesDetected: null,
+        seriesDigitized: null,
+        seriesOmittedComputed: null,
         curves: [
           curve("10.1002_adfm.201705553-p015-f01-s01", "Experimental", "experimental", "brick-wall COF", 1899, 2.015, 39.975, "/demo/adfm-201705553-curves.csv"),
           curve("10.1002_adfm.201705553-p015-f01-s02", "Brick-wall-AB", "simulated", "Brick-wall-AB", 1902, 1.953, 39.973, "/demo/adfm-201705553-curves.csv"),
@@ -85,7 +98,14 @@ const DEMO_RECORDS: DemoPaper[] = [
         sourceCropUrl: "/demo/anie-202113657-source.png",
         digitizedPlotUrl: "/demo/anie-202113657-digitized.png",
         overlayUrl: null,
-        qualityStatus: "reviewed",
+        qualityStatus: "pending",
+        verificationStatus: null,
+        axisAgreementDeg: null,
+        axisRmseDeg: null,
+        axisTickCount: null,
+        seriesDetected: null,
+        seriesDigitized: null,
+        seriesOmittedComputed: null,
         curves: [
           curve("10.1002_anie.202113657-p003-f01-s01", "Experimental", "experimental", "KL-FAN", 2482, 0.24, 49.86, "/demo/anie-202113657-curves.csv"),
           curve("10.1002_anie.202113657-p003-f01-s02", "AA Stacking", "simulated", "KL-FAN", 2463, 0.94, 50.18, "/demo/anie-202113657-curves.csv"),
@@ -116,7 +136,14 @@ const DEMO_RECORDS: DemoPaper[] = [
         sourceCropUrl: "/demo/chemmater-3c01952-source.png",
         digitizedPlotUrl: "/demo/chemmater-3c01952-digitized.png",
         overlayUrl: null,
-        qualityStatus: "reviewed",
+        qualityStatus: "pending",
+        verificationStatus: null,
+        axisAgreementDeg: null,
+        axisRmseDeg: null,
+        axisTickCount: null,
+        seriesDetected: null,
+        seriesDigitized: null,
+        seriesOmittedComputed: null,
         curves: [
           curve("10.1021_acs.chemmater.3c01952-p003-f01-s01", "Experimental pattern", "experimental", "COF-C2-80", 1427, 1.483, 30.003, "/demo/chemmater-3c01952-curves.csv"),
           curve("10.1021_acs.chemmater.3c01952-p003-f01-s02", "AA Stacking", "simulated", "COF-C2-80", 1427, 1.483, 30.003, "/demo/chemmater-3c01952-curves.csv"),
@@ -137,5 +164,7 @@ export const DEMO_PAPERS: PaperDetail[] = DEMO_RECORDS.map((paper) => {
     sampleStates: [...new Set(curves.flatMap((curve) => curve.sampleState ? [curve.sampleState] : []))],
     qualityStatuses: [...new Set(paper.figures.map((figure) => figure.qualityStatus))],
     hasResolvedTitle: true,
+    publicationStatus: "active" as const,
+    publicationStatusNoticeDoi: null,
   };
 });

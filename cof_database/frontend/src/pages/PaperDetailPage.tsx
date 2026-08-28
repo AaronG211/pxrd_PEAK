@@ -1,17 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowLeft,
-  CheckCircle2,
+  Bot,
   Download,
   ExternalLink,
   FileImage,
   Link2,
   Maximize2,
   ScanLine,
+  TriangleAlert,
 } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
+import { CurvePlot } from "../components/CurvePlot";
+import type { CurvePlotSeries } from "../components/CurvePlot";
+import { PublicationStatusBadge, PublicationStatusBanner } from "../components/PublicationStatusBadge";
 import { fetchPaper } from "../lib/api";
+import { describeCurveDataError, fetchFigureCurves, isAbortError } from "../lib/curveData";
 import type { CurveRole, PaperDetail, PxrdFigure } from "../types";
 
 const roleStyles: Record<CurveRole, string> = {
@@ -71,6 +76,260 @@ function FigureImage({
   );
 }
 
+/**
+ * Honest replacement for the old "reviewed" badge.
+ *
+ * `pxrd_figures.quality_status` was written as `'reviewed'` for every row by the
+ * importer, so a green check claimed a human review that never happened. The
+ * provenance badge below is deliberately identical on every figure, because that
+ * is the same truth on every figure; the varying badges carry the automated
+ * checks, and all of them stay silent until the verification columns exist.
+ */
+function FigureQualityBadges({ figure }: { figure: PxrdFigure }) {
+  const agreement = figure.axisAgreementDeg;
+  const detected = figure.seriesDetected;
+  const digitized = figure.seriesDigitized;
+  const omitted = figure.seriesOmittedComputed ?? 0;
+
+  return (
+    <>
+      <span className="badge" title="No human has reviewed this extraction.">
+        <Bot className="mr-1 h-3 w-3" aria-hidden="true" />
+        Automated extraction · not human-reviewed
+      </span>
+
+      {figure.verificationStatus === "axis_cross_validated" && (
+        <span className="badge">2θ axis cross-checked</span>
+      )}
+      {figure.verificationStatus === "axis_single_method" && (
+        <span className="badge border-amber-200 bg-amber-50 text-amber-700">
+          2θ axis from one method
+        </span>
+      )}
+      {figure.verificationStatus === "axis_arbitrated" && (
+        <span className="badge border-rose-200 bg-rose-50 text-rose-700">
+          <TriangleAlert className="mr-1 h-3 w-3" aria-hidden="true" />
+          {agreement === null
+            ? "2θ axis disputed"
+            : `2θ axis disputed — methods differed by ${agreement.toFixed(agreement < 1 ? 2 : 1)}°`}
+        </span>
+      )}
+      {figure.verificationStatus === "axis_unverified" && (
+        <span className="badge border-amber-200 bg-amber-50 text-amber-700">
+          2θ axis not verified
+        </span>
+      )}
+
+      {detected !== null && digitized !== null && digitized < detected && (
+        <span className="badge border-rose-200 bg-rose-50 text-rose-700">
+          Incomplete · {digitized} of {detected} series digitized
+        </span>
+      )}
+      {omitted > 0 && (
+        <span className="badge">
+          Experimental traces only · {omitted} computed curve{omitted === 1 ? "" : "s"} not
+          included
+        </span>
+      )}
+      {figure.qualityStatus === "flagged" && (
+        <span className="badge border-rose-200 bg-rose-50 text-rose-700">Flagged</span>
+      )}
+    </>
+  );
+}
+
+function VerificationNumber({
+  label,
+  value,
+  note,
+}: {
+  label: string;
+  value: string | null;
+  note: string;
+}) {
+  if (value === null) return null;
+  return (
+    <div>
+      <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">{label}</p>
+      <p className="mt-1 font-mono text-sm font-semibold text-slate-800">{value}</p>
+      <p className="mt-0.5 text-xs text-slate-500">{note}</p>
+    </div>
+  );
+}
+
+function FigureVerification({ figure }: { figure: PxrdFigure }) {
+  const rmse = figure.axisRmseDeg;
+  const ticks = figure.axisTickCount;
+  const agreement = figure.axisAgreementDeg;
+  const digitized = figure.seriesDigitized;
+  const detected = figure.seriesDetected;
+  const hasNumbers = rmse !== null || ticks !== null || agreement !== null || digitized !== null;
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+      {hasNumbers ? (
+        <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+          <VerificationNumber
+            label="Axis fit RMSE"
+            value={rmse === null ? null : `${rmse.toFixed(3)}°`}
+            note="residual of the 2θ calibration"
+          />
+          <VerificationNumber
+            label="Axis anchors"
+            value={ticks === null ? null : `${ticks} ticks`}
+            note="tick marks the axis was fit to"
+          />
+          <VerificationNumber
+            label="Method agreement"
+            value={agreement === null ? null : `${agreement.toFixed(3)}°`}
+            note="tick fit vs. label OCR, across the plot"
+          />
+          <VerificationNumber
+            label="Series digitized"
+            value={
+              digitized === null
+                ? null
+                : detected === null
+                  ? String(digitized)
+                  : `${digitized} of ${detected}`
+            }
+            note="traces accepted from those detected"
+          />
+        </div>
+      ) : (
+        <p className="text-sm text-slate-600">
+          Per-figure calibration numbers are not published for this record yet. The 2θ
+          uncertainty the digitizer reported for each trace is shown in the plot readout above.
+        </p>
+      )}
+      <details className="mt-3">
+        <summary className="cursor-pointer text-xs font-semibold text-blue-700 hover:underline">
+          How is this verified?
+        </summary>
+        <p className="mt-2 max-w-3xl text-xs leading-relaxed text-slate-600">
+          No human has reviewed this extraction. Every number here is produced automatically.
+          The 2θ axis is fit twice — once from detected tick marks, once from OCR of the axis
+          labels. When the two fits agree within 0.5° across the plot, the axis is marked
+          cross-checked. When they disagree, a second read breaks the tie and the figure is
+          flagged. Compare against the original crop before reuse.
+        </p>
+      </details>
+    </div>
+  );
+}
+
+/**
+ * Interactive plot section.
+ *
+ * The bundle is only fetched once the section nears the viewport: a paper can
+ * carry many figures and each `curves.csv.gz` is tens to hundreds of kilobytes,
+ * so fetching them all on mount would be far worse than the images already are.
+ */
+function FigurePlotSection({
+  figure,
+  csvUrl,
+}: {
+  figure: PxrdFigure;
+  csvUrl: string | null | undefined;
+}) {
+  const sectionRef = useRef<HTMLDivElement | null>(null);
+  // No IntersectionObserver (very old browser, some test runners) means load eagerly
+  // rather than never.
+  const [inView, setInView] = useState(() => typeof IntersectionObserver === "undefined");
+  const [series, setSeries] = useState<CurvePlotSeries[] | null>(null);
+  const [error, setError] = useState("");
+
+  const curvesBySeriesId = useMemo(
+    () => new Map(figure.curves.map((curve) => [curve.seriesId, curve])),
+    [figure.curves],
+  );
+
+  useEffect(() => {
+    if (inView) return;
+    const element = sectionRef.current;
+    if (!element) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setInView(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "300px 0px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [inView]);
+
+  useEffect(() => {
+    if (!inView || !csvUrl) return;
+    let active = true;
+    const controller = new AbortController();
+    fetchFigureCurves(csvUrl, controller.signal)
+      .then((loaded) => {
+        if (!active) return;
+        setSeries(
+          loaded.map((item) => ({
+            seriesId: item.seriesId,
+            label: curvesBySeriesId.get(item.seriesId)?.label || item.label,
+            role: curvesBySeriesId.get(item.seriesId)?.role ?? "unclassified",
+            materialName: item.materialName,
+            sampleState: item.sampleState,
+            uncertainty: item.uncertainty,
+            points: item.points,
+          })),
+        );
+      })
+      .catch((cause: unknown) => {
+        if (!active || isAbortError(cause)) return;
+        setError(describeCurveDataError(cause));
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [csvUrl, curvesBySeriesId, inView]);
+
+  const isLoading = Boolean(csvUrl) && inView && series === null && error === "";
+
+  return (
+    <div ref={sectionRef} className="border-b border-slate-200 p-5 md:p-7">
+      {!csvUrl ? (
+        <p className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+          No curve data file is attached to this figure, so there is nothing to plot. The
+          digitized trace image above is still available.
+        </p>
+      ) : error ? (
+        <div
+          role="alert"
+          className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
+        >
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>{error}</span>
+        </div>
+      ) : isLoading ? (
+        <div
+          className="rounded-xl border border-slate-200 bg-white py-10"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="flex flex-col items-center">
+            <div className="strategy-loader-wrap" aria-hidden="true">
+              <div className="strategy-loader-ring" />
+              <div className="strategy-loader-ring strategy-loader-ring-delay" />
+            </div>
+            <p className="mt-6 font-medium text-slate-500">Loading digitized curve data...</p>
+          </div>
+        </div>
+      ) : series ? (
+        <CurvePlot series={series} figureLabel={figure.figureLabel || "this PXRD figure"} />
+      ) : (
+        <div className="strategy-skeleton h-[260px] w-full" aria-hidden="true" />
+      )}
+    </div>
+  );
+}
+
 function FigureCard({ figure, index }: { figure: PxrdFigure; index: number }) {
   const csvUrl = figure.curves.find((curve) => curve.dataUrl)?.dataUrl;
   const totalPoints = figure.curves.reduce((sum, curve) => sum + curve.pointCount, 0);
@@ -95,16 +354,7 @@ function FigureCard({ figure, index }: { figure: PxrdFigure; index: number }) {
             <h2 className="text-xl font-semibold text-slate-900">
               {figure.figureLabel || `PXRD figure ${index + 1}`}
             </h2>
-            <span className={`badge ${
-              figure.qualityStatus === "reviewed"
-                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                : figure.qualityStatus === "flagged"
-                  ? "border-rose-200 bg-rose-50 text-rose-700"
-                  : ""
-            }`}>
-              {figure.qualityStatus === "reviewed" && <CheckCircle2 className="mr-1 h-3 w-3" />}
-              {figure.qualityStatus}
-            </span>
+            <FigureQualityBadges figure={figure} />
             {figure.pageNumber && (
               <span className="text-xs font-medium text-slate-400">
                 page {figure.pageNumber}
@@ -161,7 +411,12 @@ function FigureCard({ figure, index }: { figure: PxrdFigure; index: number }) {
         )}
       </div>
 
+      <FigurePlotSection figure={figure} csvUrl={csvUrl} />
+
       <div className="p-5 md:p-7">
+        <div className="mb-4">
+          <FigureVerification figure={figure} />
+        </div>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-semibold text-slate-900">Curve inventory</h3>
           <span className="text-xs text-slate-500">
@@ -307,7 +562,12 @@ export function PaperDetailPage() {
               DOI {paper.doi}
             </a>
           )}
+          <PublicationStatusBadge status={paper.publicationStatus} />
         </div>
+        <PublicationStatusBanner
+          status={paper.publicationStatus}
+          noticeDoi={paper.publicationStatusNoticeDoi}
+        />
         <h1 className="max-w-5xl text-3xl font-semibold leading-tight tracking-tight text-slate-900 md:text-4xl">
           {paper.hasResolvedTitle ? paper.title : "Title unavailable"}
         </h1>

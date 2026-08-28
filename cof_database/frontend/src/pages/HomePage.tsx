@@ -14,7 +14,9 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Hero } from "../components/Hero";
+import { PublicationStatusBadge } from "../components/PublicationStatusBadge";
 import { fetchPapers, isSupabaseConfigured } from "../lib/api";
+import { publicationStatusLabel } from "../lib/publicationStatus";
 import type { CurveRole, PaperSummary } from "../types";
 import { useEffect } from "react";
 
@@ -104,12 +106,15 @@ function MaterialChips({ paper }: { paper: PaperSummary }) {
 function PaperIdentity({ paper }: { paper: PaperSummary }) {
   return (
     <div>
-      <Link
-        to={`/paper/${encodeURIComponent(paper.id)}`}
-        className="inventory-title-link font-semibold leading-snug text-slate-900 hover:text-blue-700"
-      >
-        {paper.hasResolvedTitle ? paper.title : "Title unavailable"}
-      </Link>
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <Link
+          to={`/paper/${encodeURIComponent(paper.id)}`}
+          className="inventory-title-link font-semibold leading-snug text-slate-900 hover:text-blue-700"
+        >
+          {paper.hasResolvedTitle ? paper.title : "Title unavailable"}
+        </Link>
+        <PublicationStatusBadge status={paper.publicationStatus} />
+      </div>
       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-slate-500">
         <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono font-semibold text-slate-600">
           {paper.paperNumber}
@@ -173,6 +178,7 @@ export function HomePage() {
         paper.doi,
         paper.authors,
         paper.journal,
+        publicationStatusLabel(paper.publicationStatus),
         ...paper.materialNames,
         ...paper.sampleStates,
       ]
@@ -494,7 +500,7 @@ export function HomePage() {
                           <td className="px-5 py-5 text-right">
                             <Link
                               to={`/paper/${encodeURIComponent(paper.id)}`}
-                              aria-label={`Open ${paper.hasResolvedTitle ? paper.title : paper.paperNumber}`}
+                              aria-label={`Open ${paper.hasResolvedTitle ? paper.title : paper.paperNumber}${paper.publicationStatus === "active" ? "" : ` — ${publicationStatusLabel(paper.publicationStatus)}`}`}
                               className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition group-hover:border-slate-300 group-hover:text-slate-900"
                             >
                               <ArrowUpRight className="inventory-link-arrow h-4 w-4" />
@@ -518,7 +524,7 @@ export function HomePage() {
                         </div>
                         <Link
                           to={`/paper/${encodeURIComponent(paper.id)}`}
-                          aria-label={`Open ${paper.hasResolvedTitle ? paper.title : paper.paperNumber}`}
+                          aria-label={`Open ${paper.hasResolvedTitle ? paper.title : paper.paperNumber}${paper.publicationStatus === "active" ? "" : ` — ${publicationStatusLabel(paper.publicationStatus)}`}`}
                           className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-slate-600"
                         >
                           <ArrowUpRight className="h-4 w-4" />

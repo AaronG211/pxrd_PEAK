@@ -26,6 +26,40 @@ Crossref renders cleanly is repaired. Other resolved titles are left alone
 unless --prefer-crossref-titles is supplied; either way every divergence is
 reported.
 
+Publication-status rule: Crossref carries two independent, and in this corpus
+perfectly disjoint, signals.
+
+  1. `updated-by` is the authoritative Crossmark link. It marks the WORK that
+     was retracted or corrected and names the notice. It is typed, so a
+     correction is never mistaken for a retraction. It lags: publishers who do
+     not deposit their own Crossmark updates only acquire the link when the
+     Retraction Watch ingest catches up, months later.
+  2. The `RETRACTED:` / `RETRACTED ARTICLE:` / `WITHDRAWN:` title stamp is
+     immediate but heuristic, and is the only timely signal for those
+     publishers.
+
+Both are used. Over the 2,370-DOI corpus `updated-by` found 11 corrections and
+zero retractions, while the title stamp found 2 retractions and zero
+corrections; implementing either alone misses one category entirely.
+
+Direction rule: `update-to` and `updated-by` are strict inverses. A record
+carrying `update-to` IS the notice and points back at the work it retracts, so
+it is never flagged; a record carrying `updated-by` is the retracted or
+corrected work. The title heuristic separates the same two directions: a
+publisher stamps `RETRACTED:` on the article, while a notice is titled
+`Retraction of "X"`, `Correction to "X"`, `Corrigendum`, `Erratum`, or
+`Expression of Concern`. Notice-shaped titles are an explicit negative.
+`Expression of Concern:` is deliberately absent from the article-side stamps
+because Springer uses that form for the notice.
+
+Title-stamp rule: the stamp is STRIPPED from any title adopted from Crossref,
+and the badge carries the meaning instead. The publisher agrees the stamp is
+not the title: its own retraction notice quotes the work without it. Keeping
+the stamp would also make the site inconsistent (a paper whose title came from
+the PDF shows no stamp, one whose title came from Crossref does), would break
+title search and alphabetical sort, and would communicate nothing to a screen
+reader. Every strip is listed under `stripped_title_stamps` in the report.
+
 Failure rule: a network or HTTP failure is not a Crossref verdict. Papers in a
 failed batch are left entirely untouched - no timestamp, no status - so a rerun
 retries them instead of skipping them as already fetched. The run exits 1
@@ -44,7 +78,7 @@ import sqlite3
 import sys
 import time
 import unicodedata
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -57,7 +91,8 @@ SEED = "pxrd-free-pilot-v1"
 CROSSREF_WORKS = "https://api.crossref.org/works"
 CROSSREF_SELECT = (
     "DOI,title,container-title,short-container-title,author,issued,"
-    "published-print,published-online,type,publisher,license"
+    "published-print,published-online,type,publisher,license,"
+    "update-to,updated-by"
 )
 USER_AGENT = "pxrd-open-database/1.0 (+https://pxrd-peak.vercel.app)"
 BATCH_SIZE = 50
@@ -101,6 +136,55 @@ CROSSREF_COLUMNS = (
     ("crossref_fetched_at", "TEXT"),
     ("crossref_license", "TEXT"),
     ("crossref_status", "TEXT"),
+    ("publication_status", "TEXT"),
+    ("publication_status_notice_doi", "TEXT"),
+    ("publication_status_source", "TEXT"),
+    ("publication_status_updated", "TEXT"),
+)
+
+# Crossmark update `type` -> the lifecycle value the website publishes. A work
+# carrying several updates takes the most severe.
+UPDATE_TYPE_STATUS = {
+    "retraction": "retracted",
+    "partial_retraction": "concern",
+    "withdrawal": "withdrawn",
+    "removal": "withdrawn",
+    "expression_of_concern": "concern",
+    "correction": "corrected",
+    "erratum": "corrected",
+    "corrigendum": "corrected",
+    "addendum": "corrected",
+    "clarification": "corrected",
+    "new_version": "corrected",
+    "new_edition": "corrected",
+}
+STATUS_SEVERITY = {
+    "retracted": 4,
+    "withdrawn": 3,
+    "concern": 2,
+    "corrected": 1,
+    "active": 0,
+}
+
+# ARTICLE-side stamps only: ACS "RETRACTED:", Springer "RETRACTED ARTICLE:",
+# Elsevier "WITHDRAWN:". "Expression of Concern:" is deliberately absent -
+# Springer uses that form for the NOTICE, so matching it would invert the
+# direction and flag the notice as the retracted work.
+RETRACTED_TITLE = re.compile(
+    r"^\s*(?:RETRACTED\s+ARTICLE|RETRACTED)\s*[:\uff1a]", re.IGNORECASE
+)
+WITHDRAWN_TITLE = re.compile(r"^\s*WITHDRAWN\s*[:\uff1a]", re.IGNORECASE)
+# NOTICE-side titles. A record matching one of these is the notice itself.
+NOTICE_TITLE = re.compile(
+    r"^\s*(?:Retraction\s+(?:of|Note|Notice)|Retraction\s*[:\uff1a]"
+    r"|Correction\s+to|Correction\s*[:\uff1a]|Corrigendum|Erratum|Addendum"
+    r"|Author\s+Correction|Publisher\s+Correction"
+    r"|(?:Editorial\s+)?Expression\s+of\s+Concern)\b",
+    re.IGNORECASE,
+)
+# Stripped from any title adopted from Crossref. See the module docstring.
+TITLE_STAMP = re.compile(
+    r"^\s*(RETRACTED\s+ARTICLE|RETRACTED|WITHDRAWN)\s*[:\uff1a]\s*", re.IGNORECASE
 )
 
 
@@ -315,6 +399,89 @@ def extract_license(item: dict[str, Any]) -> str | None:
     return url or None
 
 
+def iso_date(field: Any) -> str | None:
+    """Render a Crossref date-parts block as YYYY-MM-DD, or None."""
+    if not isinstance(field, dict):
+        return None
+    parts = field.get("date-parts") or []
+    if parts and isinstance(parts[0], list) and parts[0]:
+        numbers = [
+            value
+            for value in parts[0][:3]
+            if isinstance(value, int) and not isinstance(value, bool)
+        ]
+        if numbers and MIN_YEAR <= numbers[0] <= MAX_YEAR:
+            year = numbers[0]
+            month = numbers[1] if len(numbers) > 1 else 1
+            day = numbers[2] if len(numbers) > 2 else 1
+            try:
+                return date(year, month, day).isoformat()
+            except ValueError:
+                return None
+    stamp = str(field.get("date-time") or "")[:10]
+    try:
+        return date.fromisoformat(stamp).isoformat()
+    except ValueError:
+        return None
+
+
+def strip_title_stamp(title: str) -> tuple[str, str | None]:
+    """Return (title without a RETRACTED/WITHDRAWN stamp, the stamp or None).
+
+    The stamp is a publisher display convention on the article record, not the
+    title of record: the matching retraction notice quotes the work without it.
+    It is removed so the badge, not a string prefix, carries the meaning.
+    """
+    match = TITLE_STAMP.match(title)
+    if not match:
+        return title, None
+    return title[match.end() :].strip(), match.group(1).upper()
+
+
+def extract_publication_status(
+    item: dict[str, Any],
+) -> tuple[str, str | None, str | None, str | None, bool]:
+    """Return (status, notice_doi, source, updated_iso, is_notice).
+
+    Direction rule: `update-to` marks a NOTICE, which is never flagged as
+    retracted; `updated-by` marks the retracted or corrected WORK.
+    """
+    # 1. This record is itself a retraction/correction notice.
+    if item.get("update-to"):
+        return "active", None, None, None, True
+
+    # 2. Authoritative, typed Crossmark link. Preferred whenever present.
+    best: tuple[str, str | None, str, str | None] | None = None
+    for update in item.get("updated-by") or []:
+        if not isinstance(update, dict):
+            continue
+        status = UPDATE_TYPE_STATUS.get(str(update.get("type") or "").strip().lower())
+        if status is None:
+            continue
+        if best is None or STATUS_SEVERITY[status] > STATUS_SEVERITY[best[0]]:
+            doi = str(update.get("DOI") or "").strip() or None
+            best = (status, doi, "crossref-update", iso_date(update.get("updated")))
+    if best is not None:
+        return (*best, False)
+
+    # 3. Title-stamp fallback. The only signal for a publisher that deposits no
+    #    retraction Crossmark of its own. A notice-shaped title is reported as
+    #    a notice, never as the retracted work. normalize_title is applied
+    #    first because a deposited notice title arrives as
+    #    'Retraction\n                    of "..."', which defeats a naive
+    #    anchored match.
+    title = normalize_title(str((item.get("title") or [""])[0] or ""))
+    if title and NOTICE_TITLE.match(title):
+        return "active", None, None, None, True
+    if title:
+        if RETRACTED_TITLE.match(title):
+            return "retracted", None, "crossref-title", None, False
+        if WITHDRAWN_TITLE.match(title):
+            return "withdrawn", None, "crossref-title", None, False
+
+    return "active", None, None, None, False
+
+
 def deterministic_clean_papers(conn: sqlite3.Connection, limit: int) -> list[str]:
     rows = conn.execute(
         "select distinct paper_id from curves where in_clean_set=1"
@@ -354,7 +521,19 @@ def ensure_columns(conn: sqlite3.Connection) -> list[str]:
 
 def load_papers(conn: sqlite3.Connection, paper_ids: list[str]) -> dict[str, dict[str, Any]]:
     columns = existing_columns(conn)
-    wanted = ["paper_id", "doi", "title", "authors", "journal", "publication_year", "crossref_fetched_at"]
+    wanted = [
+        "paper_id",
+        "doi",
+        "title",
+        "authors",
+        "journal",
+        "publication_year",
+        "crossref_fetched_at",
+        "publication_status",
+        "publication_status_notice_doi",
+        "publication_status_source",
+        "publication_status_updated",
+    ]
     available = [name for name in wanted if name in columns]
     marks = ",".join("?" for _ in paper_ids)
     rows = conn.execute(
@@ -561,6 +740,11 @@ def main() -> int:
         rejected_years: list[dict[str, Any]] = []
         title_divergences: list[dict[str, Any]] = []
         retracted: list[dict[str, str]] = []
+        stripped_title_stamps: list[dict[str, Any]] = []
+        publication_status_changes: list[dict[str, Any]] = []
+        notice_records: list[dict[str, str]] = []
+        manual_status_preserved: list[dict[str, Any]] = []
+        status_counts: dict[str, int] = {}
         field_changes: list[dict[str, Any]] = []
         truncated_authors: list[dict[str, Any]] = []
         journal_from_publisher: list[str] = []
@@ -586,6 +770,15 @@ def main() -> int:
                         "title": record["title"],
                         "title_action": "keep",
                         "crossref_license": None,
+                        # Crossref did not answer for this DOI. That is not a
+                        # verdict on its publication status, so whatever is
+                        # already recorded is preserved verbatim.
+                        "publication_status": record["publication_status"],
+                        "publication_status_notice_doi": record[
+                            "publication_status_notice_doi"
+                        ],
+                        "publication_status_source": record["publication_status_source"],
+                        "publication_status_updated": record["publication_status_updated"],
                     }
                 )
                 continue
@@ -605,9 +798,67 @@ def main() -> int:
                         "authors_full": authors_full,
                     }
                 )
-            crossref_title = normalize_title(str((item.get("title") or [""])[0] or ""))
-            if crossref_title.startswith("RETRACTED:"):
-                retracted.append({"paper_id": paper_id, "doi": doi, "title": crossref_title})
+            (
+                status,
+                notice_doi,
+                status_source,
+                status_updated,
+                is_notice,
+            ) = extract_publication_status(item)
+            if is_notice:
+                # A retraction/correction notice has entered the corpus as if it
+                # were a paper. It is never flagged as retracted, but it is a
+                # data-quality bug worth naming.
+                notice_records.append({"paper_id": paper_id, "doi": doi})
+            previous_status = record["publication_status"]
+            previous_source = record["publication_status_source"]
+            if str(previous_source or "").strip().lower() == "manual":
+                # A human decision is not overwritten by a Crossref sweep.
+                manual_status_preserved.append(
+                    {
+                        "paper_id": paper_id,
+                        "doi": doi,
+                        "kept": previous_status,
+                        "crossref_would_say": status,
+                    }
+                )
+                status = previous_status or "active"
+                notice_doi = record["publication_status_notice_doi"]
+                status_source = previous_source
+                status_updated = record["publication_status_updated"]
+            status_counts[status] = status_counts.get(status, 0) + 1
+            if status != (previous_status or "active"):
+                publication_status_changes.append(
+                    {
+                        "paper_id": paper_id,
+                        "doi": doi,
+                        "previous": previous_status,
+                        "status": status,
+                        "source": status_source,
+                        "notice_doi": notice_doi,
+                        "updated": status_updated,
+                    }
+                )
+            if status == "retracted":
+                retracted.append(
+                    {"paper_id": paper_id, "doi": doi, "source": status_source or ""}
+                )
+
+            crossref_title_raw = normalize_title(str((item.get("title") or [""])[0] or ""))
+            # The stamp is stripped BEFORE every downstream title decision, so
+            # usability, the unresolved test, and the divergence classification
+            # all see the title that would actually be stored.
+            crossref_title, stamp = strip_title_stamp(crossref_title_raw)
+            if stamp:
+                stripped_title_stamps.append(
+                    {
+                        "paper_id": paper_id,
+                        "doi": doi,
+                        "stamp": stamp,
+                        "crossref_title": crossref_title_raw,
+                        "stored_title": crossref_title,
+                    }
+                )
 
             unresolved = title_is_unresolved(record["title"], paper_id, doi)
             usable = bool(crossref_title) and title_is_usable(crossref_title, paper_id, doi)
@@ -693,6 +944,11 @@ def main() -> int:
                     "title": title,
                     "title_action": title_action,
                     "crossref_license": extract_license(item),
+                    "previous_publication_status": previous_status,
+                    "publication_status": status,
+                    "publication_status_notice_doi": notice_doi,
+                    "publication_status_source": status_source,
+                    "publication_status_updated": status_updated,
                 }
             )
 
@@ -715,6 +971,19 @@ def main() -> int:
                 f"outside {MIN_YEAR}-{MAX_YEAR} or non-integer are rejected and "
                 "never written"
             ),
+            "publication_status_rule": (
+                "typed Crossmark `updated-by` first (authoritative, lagging), then the "
+                "article-side RETRACTED:/RETRACTED ARTICLE:/WITHDRAWN: title stamp "
+                "(immediate, heuristic); a record carrying `update-to` is the NOTICE and "
+                "is never flagged; notice-shaped titles are an explicit negative; a "
+                "publication_status_source of 'manual' is never overwritten"
+            ),
+            "title_stamp_rule": (
+                "a RETRACTED:/RETRACTED ARTICLE:/WITHDRAWN: stamp is STRIPPED from any "
+                "title adopted from Crossref - the publisher's own notice quotes the work "
+                "without it, and the badge carries the meaning instead; every strip is "
+                "listed under stripped_title_stamps"
+            ),
             "title_rule": (
                 "fill only unresolved titles (null, empty, equal to paper_id, or equal to DOI); "
                 "a resolved local title carrying mis-decoded bytes that Crossref renders cleanly "
@@ -735,6 +1004,11 @@ def main() -> int:
             "journal_from_publisher": journal_from_publisher,
             "truncated_author_lists": truncated_authors,
             "retracted_titles": retracted,
+            "publication_status_counts": dict(sorted(status_counts.items())),
+            "publication_status_changes": publication_status_changes,
+            "publication_status_notice_records": notice_records,
+            "publication_status_manual_preserved": manual_status_preserved,
+            "stripped_title_stamps": stripped_title_stamps,
             "repaired_mojibake_titles": repaired_mojibake,
             "still_unresolved_titles": still_unresolved_titles,
             "title_divergences": title_divergences,
@@ -750,7 +1024,9 @@ def main() -> int:
                 """
                 update papers
                 set journal=?, publication_year=?, authors=?, title=?,
-                    crossref_fetched_at=?, crossref_license=?, crossref_status=?
+                    crossref_fetched_at=?, crossref_license=?, crossref_status=?,
+                    publication_status=?, publication_status_notice_doi=?,
+                    publication_status_source=?, publication_status_updated=?
                 where paper_id=?
                 """,
                 [
@@ -762,6 +1038,10 @@ def main() -> int:
                         fetched_at,
                         row.get("crossref_license"),
                         row["crossref_status"],
+                        row.get("publication_status"),
+                        row.get("publication_status_notice_doi"),
+                        row.get("publication_status_source"),
+                        row.get("publication_status_updated"),
                         row["paper_id"],
                     )
                     for row in updates
@@ -784,6 +1064,22 @@ def main() -> int:
         f"{len(title_divergences)} title divergences, {len(field_changes)} value changes, "
         f"{len(rejected_years)} years rejected."
     )
+    print(
+        "Publication status: "
+        + (
+            ", ".join(f"{name} {count}" for name, count in sorted(status_counts.items()))
+            or "nothing resolved"
+        )
+        + f"; {len(publication_status_changes)} changes, "
+        f"{len(stripped_title_stamps)} title stamps stripped, "
+        f"{len(notice_records)} notice records found in the corpus."
+    )
+    for change in publication_status_changes:
+        if change["status"] in {"retracted", "withdrawn", "concern"}:
+            print(
+                f"  {change['status'].upper():10s} {change['doi']} "
+                f"(source {change['source']}, notice {change['notice_doi'] or 'unknown'})"
+            )
     print(
         f"Network: {network_calls} Crossref requests, {len(failed_batches)} failed batches."
     )
