@@ -4,6 +4,27 @@
 The importer is idempotent: metadata is upserted and existing Storage objects
 are skipped unless --force-assets is supplied. Images and CSVs are converted in
 memory, so no second multi-gigabyte staging tree is created on disk.
+
+Quality rule: `quality_status` is DERIVED, never asserted. No human has
+reviewed any figure in this database, so the importer never emits 'reviewed'.
+A figure is 'flagged' only when an automated check disputed it - the two
+independent 2-theta axis fits disagreed and needed a tie-break
+(calibration.status == 'arbitrated'), or not every detected series survived
+digitization (figures.status == 'partial'). Everything else is 'pending':
+automated extraction passed its own checks and nothing has reviewed it since.
+The finer provenance travels in `verification_status` and the axis/series
+numbers beside it, so the website can show numbers rather than a colour.
+
+Publication rule: `publication_status` is carried through from the local
+papers table, where `backfill_crossref_metadata.py` writes it. It is never
+invented here. An unrecognised local value aborts the run rather than being
+coerced to 'active', because coercion would silently unflag a retracted paper
+through the merge-duplicates upsert.
+
+Column rule: every optional column is emitted only when the local SQLite
+column exists. The upsert uses resolution=merge-duplicates, which builds its
+UPDATE SET list from the payload keys, so an omitted key preserves the live
+Supabase value while a hardcoded None would overwrite it.
 """
 
 from __future__ import annotations
@@ -13,12 +34,14 @@ import csv
 import gzip
 import hashlib
 import io
+import json
 import os
 import sqlite3
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import quote
@@ -40,11 +63,57 @@ VALID_ROLES = {
     "unclassified",
 }
 
+# result.json calibration.status -> published verification_status. The pipeline
+# fits the 2-theta axis twice, once from detected tick marks and once from OCR
+# of the axis labels, then compares the two fits across the plot width against
+# a 0.5 deg tolerance (src/pxrd_fetcher/v2/calibrate.py).
+CALIBRATION_VERIFICATION = {
+    "consensus": "axis_cross_validated",
+    "single_method": "axis_single_method",
+    "arbitrated": "axis_arbitrated",
+}
+UNVERIFIED = "axis_unverified"
+DISPUTED_AXIS = "axis_arbitrated"
+INCOMPLETE_FIGURE_STATUS = "partial"
+
+PUBLICATION_STATUSES = {"active", "retracted", "withdrawn", "concern", "corrected"}
+PUBLICATION_STATUS_SOURCES = {"crossref-update", "crossref-title", "manual"}
+# Written by backfill_crossref_metadata.py. Gated on publication_status.
+PAPER_STATUS_COLUMNS = (
+    "publication_status",
+    "publication_status_notice_doi",
+    "publication_status_source",
+    "publication_status_updated",
+)
+# local SQLite curves column -> published pxrd_curves column, plus the CHECK
+# range each one must satisfy so a stray value cannot fail a 300-row batch.
+CURVE_FIDELITY_COLUMNS = {
+    "two_theta_uncertainty_deg": ("two_theta_uncertainty_deg", 0.0, None),
+    "confidence": ("trace_confidence", 0.0, 1.0),
+    "snap_rate": ("snap_rate", 0.0, 1.0),
+    "mean_snap_residual_px": ("mean_snap_residual_px", 0.0, None),
+}
+
 
 @dataclass(frozen=True)
 class FigureRef:
     paper_id: str
     figure_id: str
+
+
+@dataclass(frozen=True)
+class FigureVerification:
+    """What the pipeline can honestly say about one figure's calibration."""
+
+    status: str
+    agreement_deg: float | None
+    rmse_deg: float | None
+    tick_count: int | None
+    series_detected: int | None
+    series_digitized: int | None
+
+
+UNVERIFIED_FIGURE = FigureVerification(UNVERIFIED, None, None, None, None, None)
 
 
 def chunks(rows: list[dict[str, Any]], size: int) -> Iterable[list[dict[str, Any]]]:
@@ -192,19 +261,172 @@ def safe_year(value: Any) -> int | None:
     return year if 1800 <= year <= 2200 else None
 
 
+def bounded_float(value: Any, minimum: float | None = None, maximum: float | None = None) -> float | None:
+    """Coerce a stored float, or None. Guards the Supabase range CHECKs.
+
+    NaN and the infinities are rejected: json.loads accepts them as literals,
+    and either one would fail a whole upsert batch rather than one row.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    if minimum is not None and number < minimum:
+        return None
+    if maximum is not None and number > maximum:
+        return None
+    return number
+
+
+def bounded_int(value: Any, minimum: int = 0) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= minimum else None
+
+
+def read_verification(result_path: Path) -> FigureVerification:
+    """Read calibration provenance out of one pipeline result.json.
+
+    A missing, unreadable, or unexpected file yields `axis_unverified` with no
+    numbers. This function never guesses: an unrecognised calibration status is
+    reported as unverified rather than assumed to be a consensus.
+    """
+    try:
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return UNVERIFIED_FIGURE
+    if not isinstance(payload, dict):
+        return UNVERIFIED_FIGURE
+
+    calibration = payload.get("calibration")
+    calibration = calibration if isinstance(calibration, dict) else {}
+    fit = calibration.get("fit")
+    fit = fit if isinstance(fit, dict) else {}
+
+    raw_series = payload.get("series")
+    if isinstance(raw_series, list):
+        detected = len(raw_series)
+        digitized = sum(
+            1
+            for entry in raw_series
+            if isinstance(entry, dict) and entry.get("status") == "accepted"
+        )
+    else:
+        detected = None
+        digitized = None
+
+    return FigureVerification(
+        status=CALIBRATION_VERIFICATION.get(
+            str(calibration.get("status") or "").strip().lower(), UNVERIFIED
+        ),
+        agreement_deg=bounded_float(calibration.get("agreement_deg"), minimum=0.0),
+        rmse_deg=bounded_float(fit.get("rmse_deg"), minimum=0.0),
+        tick_count=bounded_int(fit.get("n_points")),
+        series_detected=detected,
+        series_digitized=digitized,
+    )
+
+
+def derive_quality_status(
+    figure_status: str | None, verification_status: str
+) -> tuple[str, tuple[str, ...]]:
+    """Return ('pending' | 'flagged', reasons). Never 'reviewed'.
+
+    No human has reviewed any figure in this database, so 'reviewed' is not a
+    value this importer is allowed to produce; it stays reserved for a
+    human-review workflow that does not exist yet.
+
+    'flagged' means an automated check DISPUTED the figure:
+      axis_arbitrated    the tick-mark fit and the OCR fit disagreed by more
+                         than 0.5 deg and a second read broke the tie, so the
+                         axis rests on arbitration rather than on agreement
+      series_incomplete  figures.status == 'partial': at least one detected
+                         series failed digitization
+
+    A single-method axis is deliberately NOT flagged. Nothing disputed it;
+    there was simply only one witness. That is a disclosure, and it travels in
+    verification_status. Computed curves (simulated / refined / difference)
+    omitted from the clean set are likewise a disclosure, carried by
+    series_omitted_computed, not a defect.
+    """
+    reasons: list[str] = []
+    if verification_status == DISPUTED_AXIS:
+        reasons.append("axis_arbitrated")
+    if str(figure_status or "").strip().lower() == INCOMPLETE_FIGURE_STATUS:
+        reasons.append("series_incomplete")
+    return ("flagged" if reasons else "pending"), tuple(reasons)
+
+
+def coerce_publication_status(value: Any, paper_id: str) -> str:
+    status = str(value or "").strip().lower() or "active"
+    if status not in PUBLICATION_STATUSES:
+        raise ValueError(
+            f"{paper_id}: local publication_status {value!r} is not one of "
+            f"{sorted(PUBLICATION_STATUSES)}. Refusing to publish. Coercing it "
+            "to 'active' would silently unflag a retracted paper, because the "
+            "upsert merges duplicates."
+        )
+    return status
+
+
+def coerce_publication_status_source(value: Any, paper_id: str) -> str | None:
+    source = str(value or "").strip().lower()
+    if not source:
+        return None
+    if source not in PUBLICATION_STATUS_SOURCES:
+        raise ValueError(
+            f"{paper_id}: local publication_status_source {value!r} is not one "
+            f"of {sorted(PUBLICATION_STATUS_SOURCES)}. Refusing to publish an "
+            "unattributable status."
+        )
+    return source
+
+
+def coerce_publication_status_date(value: Any, paper_id: str) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10]).isoformat()
+    except ValueError as exc:
+        raise ValueError(
+            f"{paper_id}: local publication_status_updated {value!r} is not an "
+            "ISO date. Refusing to publish rather than dropping the provenance "
+            "of a retraction."
+        ) from exc
+
+
 def fetch_metadata(
-    conn: sqlite3.Connection, paper_ids: list[str]
+    conn: sqlite3.Connection,
+    paper_ids: list[str],
+    assets_root: Path | None = None,
+    include_overlays: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[FigureRef]]:
+    """Build the three upsert payloads.
+
+    `assets_root` is where the pipeline run directories live. When it is given,
+    each figure's result.json supplies the axis-calibration provenance that the
+    SQLite mirror does not carry. When it is None - the --metadata-only path,
+    which never upserts figures - every figure is reported as axis_unverified
+    rather than assumed to be fine.
+    """
     marks = placeholders(paper_ids)
-    # journal / publication_year / authors are populated by
-    # backfill_crossref_metadata.py. They are selected only when the columns
-    # exist, so a database predating that backfill still imports. Sending them
-    # matters: the upsert below uses resolution=merge-duplicates, so emitting a
-    # hardcoded None here would overwrite live Supabase values with NULL.
+
+    # Optional columns are selected only when they exist, so a database
+    # predating a backfill still imports. They are also EMITTED only when they
+    # exist: resolution=merge-duplicates builds its UPDATE SET list from the
+    # payload keys, so an omitted key preserves the live Supabase value while a
+    # hardcoded None would overwrite it.
     present = {row[1] for row in conn.execute("PRAGMA table_info(papers)")}
     optional = [
         name
-        for name in ("journal", "publication_year", "authors")
+        for name in ("journal", "publication_year", "authors", *PAPER_STATUS_COLUMNS)
         if name in present
     ]
     selected = ["paper_id", "doi", "title", *optional]
@@ -223,23 +445,45 @@ def fetch_metadata(
         record = dict(zip(selected, row))
         paper_id = record["paper_id"]
         doi = record["doi"]
-        papers.append(
-            {
-                "id": paper_id,
-                "paper_number": f"PXRD-{rank[paper_id]:05d}",
-                "doi": doi or None,
-                "title": record["title"] or paper_id,
-                "authors": record.get("authors") or None,
-                "journal": record.get("journal") or None,
-                "publication_year": safe_year(record.get("publication_year")),
-                "source_url": f"https://doi.org/{doi}" if doi else None,
-            }
-        )
+        paper: dict[str, Any] = {
+            "id": paper_id,
+            "paper_number": f"PXRD-{rank[paper_id]:05d}",
+            "doi": doi or None,
+            "title": record["title"] or paper_id,
+            "source_url": f"https://doi.org/{doi}" if doi else None,
+        }
+        if "authors" in present:
+            paper["authors"] = record.get("authors") or None
+        if "journal" in present:
+            paper["journal"] = record.get("journal") or None
+        if "publication_year" in present:
+            paper["publication_year"] = safe_year(record.get("publication_year"))
+        if "publication_status" in present:
+            paper["publication_status"] = coerce_publication_status(
+                record.get("publication_status"), paper_id
+            )
+            if "publication_status_notice_doi" in present:
+                paper["publication_status_notice_doi"] = (
+                    str(record.get("publication_status_notice_doi") or "").strip() or None
+                )
+            if "publication_status_source" in present:
+                paper["publication_status_source"] = coerce_publication_status_source(
+                    record.get("publication_status_source"), paper_id
+                )
+            if "publication_status_updated" in present:
+                paper["publication_status_updated"] = coerce_publication_status_date(
+                    record.get("publication_status_updated"), paper_id
+                )
+        papers.append(paper)
 
+    figure_columns = {row[1] for row in conn.execute("PRAGMA table_info(figures)")}
+    # figures.status distinguishes 'accepted' from 'partial'. A database
+    # without it loses one of the two flag reasons rather than the whole run.
+    status_select = "f.status" if "status" in figure_columns else "null"
     figure_rows = conn.execute(
         f"""
         select distinct f.figure_id, f.paper_id, f.figure_label, f.page_number,
-               f.caption_text
+               f.caption_text, {status_select}
         from figures f
         join curves c on c.figure_id=f.figure_id
         where c.in_clean_set=1 and f.paper_id in ({marks})
@@ -248,27 +492,56 @@ def fetch_metadata(
         paper_ids,
     ).fetchall()
 
+    # Curves excluded from the clean set on a published figure. Every one of
+    # these in the pilot is a computed trace (simulated / Pawley refined /
+    # difference), not a failure, so it is disclosed rather than flagged.
+    omitted_computed = {
+        figure_id: count
+        for figure_id, count in conn.execute(
+            f"""
+            select figure_id, count(*)
+            from curves
+            where in_clean_set=0 and paper_id in ({marks})
+            group by figure_id
+            """,
+            paper_ids,
+        )
+    }
+
     figures: list[dict[str, Any]] = []
     figure_refs: list[FigureRef] = []
     figure_order: dict[str, int] = {}
-    for figure_id, paper_id, label, page, caption in figure_rows:
+    for figure_id, paper_id, label, page, caption, figure_status in figure_rows:
         order = figure_order.get(paper_id, 0)
         figure_order[paper_id] = order + 1
         base = f"papers/{paper_id}/{figure_id}"
-        figures.append(
-            {
-                "id": figure_id,
-                "paper_id": paper_id,
-                "figure_label": label or None,
-                "page_number": page,
-                "caption": caption or None,
-                "crop_path": f"{base}/source.webp",
-                "digitized_plot_path": f"{base}/digitized.webp",
-                "overlay_path": None,
-                "quality_status": "reviewed",
-                "sort_order": order,
-            }
+        verification = (
+            read_verification(assets_root / paper_id / figure_id / "result.json")
+            if assets_root is not None
+            else UNVERIFIED_FIGURE
         )
+        quality_status, _reasons = derive_quality_status(figure_status, verification.status)
+        figure: dict[str, Any] = {
+            "id": figure_id,
+            "paper_id": paper_id,
+            "figure_label": label or None,
+            "page_number": page,
+            "caption": caption or None,
+            "crop_path": f"{base}/source.webp",
+            "digitized_plot_path": f"{base}/digitized.webp",
+            "quality_status": quality_status,
+            "verification_status": verification.status,
+            "axis_agreement_deg": verification.agreement_deg,
+            "axis_rmse_deg": verification.rmse_deg,
+            "axis_tick_count": verification.tick_count,
+            "series_detected": verification.series_detected,
+            "series_digitized": verification.series_digitized,
+            "series_omitted_computed": omitted_computed.get(figure_id, 0),
+            "sort_order": order,
+        }
+        if include_overlays:
+            figure["overlay_path"] = f"{base}/overlay.webp"
+        figures.append(figure)
         figure_refs.append(FigureRef(paper_id, figure_id))
 
     context_roles = dict(
@@ -276,10 +549,23 @@ def fetch_metadata(
             "select series_id, lower(curve_role) from contexts where curve_role is not null"
         ).fetchall()
     )
+    curve_columns = {row[1] for row in conn.execute("PRAGMA table_info(curves)")}
+    fidelity = [name for name in CURVE_FIDELITY_COLUMNS if name in curve_columns]
+    base_curve_columns = [
+        "series_id",
+        "figure_id",
+        "label",
+        "material_name",
+        "sample_state",
+        "two_theta_min",
+        "two_theta_max",
+        "n_points",
+        "n_peaks",
+    ]
+    curve_select = [*base_curve_columns, *fidelity]
     curve_rows = conn.execute(
         f"""
-        select c.series_id, c.figure_id, c.label, c.material_name, c.sample_state,
-               c.two_theta_min, c.two_theta_max, c.n_points, c.n_peaks
+        select {", ".join("c." + name for name in curve_select)}
         from curves c
         where c.in_clean_set=1 and c.paper_id in ({marks})
         order by c.figure_id, c.series_id
@@ -289,29 +575,35 @@ def fetch_metadata(
 
     curves: list[dict[str, Any]] = []
     curve_order: dict[str, int] = {}
-    for series_id, figure_id, label, material, state, theta_min, theta_max, n_points, n_peaks in curve_rows:
+    for row in curve_rows:
+        record = dict(zip(curve_select, row))
+        figure_id = record["figure_id"]
         order = curve_order.get(figure_id, 0)
         curve_order[figure_id] = order + 1
-        role = infer_role(context_roles.get(series_id), label, state)
-        paper_id = figure_id.rsplit("-p", 1)[0]
-        curves.append(
-            {
-                "id": series_id,
-                "figure_id": figure_id,
-                "series_id": series_id,
-                "label": label or f"Series {order + 1}",
-                "material_name": material or None,
-                "curve_role": role,
-                "sample_state": state or None,
-                "two_theta_min": theta_min,
-                "two_theta_max": theta_max,
-                "point_count": n_points or 0,
-                "peak_count": n_peaks,
-                "data_path": f"papers/{paper_id}/{figure_id}/curves.csv.gz",
-                "in_clean_set": True,
-                "sort_order": order,
-            }
+        role = infer_role(
+            context_roles.get(record["series_id"]), record["label"], record["sample_state"]
         )
+        paper_id = figure_id.rsplit("-p", 1)[0]
+        curve: dict[str, Any] = {
+            "id": record["series_id"],
+            "figure_id": figure_id,
+            "series_id": record["series_id"],
+            "label": record["label"] or f"Series {order + 1}",
+            "material_name": record["material_name"] or None,
+            "curve_role": role,
+            "sample_state": record["sample_state"] or None,
+            "two_theta_min": record["two_theta_min"],
+            "two_theta_max": record["two_theta_max"],
+            "point_count": record["n_points"] or 0,
+            "peak_count": record["n_peaks"],
+            "data_path": f"papers/{paper_id}/{figure_id}/curves.csv.gz",
+            "in_clean_set": True,
+            "sort_order": order,
+        }
+        for name in fidelity:
+            target, low, high = CURVE_FIDELITY_COLUMNS[name]
+            curve[target] = bounded_float(record[name], minimum=low, maximum=high)
+        curves.append(curve)
     return papers, figures, curves, figure_refs
 
 
@@ -390,18 +682,26 @@ def upload_figure(
     assets_root: Path,
     figure: FigureRef,
     force_assets: bool,
+    include_overlays: bool = False,
 ) -> int:
     base = assets_root / figure.paper_id / figure.figure_id
     source = base / "crop.png"
     digitized = base / "replot_qa.png"
     if not source.is_file() or not digitized.is_file():
         raise FileNotFoundError(f"Missing figure assets under {base}")
+    overlay = base / "overlay.png"
+    if include_overlays and not overlay.is_file():
+        raise FileNotFoundError(f"Missing overlay.png under {base}")
 
     remote_base = f"papers/{figure.paper_id}/{figure.figure_id}"
-    objects = (
+    objects = [
         (f"{remote_base}/source.webp", lambda: webp_bytes(source), "image/webp"),
         (f"{remote_base}/digitized.webp", lambda: webp_bytes(digitized), "image/webp"),
-    )
+    ]
+    if include_overlays:
+        objects.append(
+            (f"{remote_base}/overlay.webp", lambda: webp_bytes(overlay), "image/webp")
+        )
     uploaded_bytes = 0
     for object_path, build, content_type in objects:
         if not force_assets and supabase.object_exists(object_path):
@@ -422,6 +722,53 @@ def upload_figure(
     return uploaded_bytes
 
 
+def summarize_verification(
+    papers: list[dict[str, Any]], figures: list[dict[str, Any]]
+) -> str:
+    """One honest paragraph about what is actually being published."""
+    quality: dict[str, int] = {}
+    verification: dict[str, int] = {}
+    incomplete = 0
+    with_omitted = 0
+    for figure in figures:
+        quality[figure["quality_status"]] = quality.get(figure["quality_status"], 0) + 1
+        key = figure["verification_status"]
+        verification[key] = verification.get(key, 0) + 1
+        detected = figure["series_detected"]
+        digitized = figure["series_digitized"]
+        if detected is not None and digitized is not None and digitized < detected:
+            incomplete += 1
+        if figure["series_omitted_computed"]:
+            with_omitted += 1
+    lines: list[str] = []
+    if figures:
+        lines += [
+            "quality_status: "
+            + ", ".join(f"{name} {count}" for name, count in sorted(quality.items()))
+            + "  (no figure is ever 'reviewed'; no human has reviewed any of these)",
+            "verification_status: "
+            + ", ".join(f"{name} {count}" for name, count in sorted(verification.items())),
+            f"{incomplete} figures did not digitize every detected series; "
+            f"{with_omitted} omit at least one computed curve.",
+        ]
+    statuses: dict[str, int] = {}
+    for paper in papers:
+        if "publication_status" in paper:
+            key = paper["publication_status"]
+            statuses[key] = statuses.get(key, 0) + 1
+    if statuses:
+        lines.append(
+            "publication_status: "
+            + ", ".join(f"{name} {count}" for name, count in sorted(statuses.items()))
+        )
+    else:
+        lines.append(
+            "publication_status: not present locally; run "
+            "backfill_crossref_metadata.py --apply to detect retractions."
+        )
+    return "\n".join(lines)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", type=Path, default=Path("../outputs/pxrd.db"))
@@ -434,6 +781,27 @@ def parse_args() -> argparse.Namespace:
         "--metadata-only",
         action="store_true",
         help="Upsert paper metadata only; do not inspect or upload assets",
+    )
+    parser.add_argument(
+        "--upload-overlays",
+        action="store_true",
+        help=(
+            "Also publish overlay.webp (the extracted trace drawn on the source "
+            "figure) and set pxrd_figures.overlay_path. Roughly doubles the "
+            "Storage footprint of the pilot, so it is opt-in. When it is off "
+            "the overlay_path key is omitted entirely, which preserves any "
+            "value already live rather than clearing it"
+        ),
+    )
+    parser.add_argument(
+        "--allow-unverified",
+        action="store_true",
+        help=(
+            "Publish figures whose result.json could not be read. Refused by "
+            "default: an unreadable calibration would be published as "
+            "'axis_unverified' and could downgrade a live 'flagged' figure to "
+            "'pending' through the merge-duplicates upsert"
+        ),
     )
     return parser.parse_args()
 
@@ -456,7 +824,14 @@ def main() -> int:
     conn = sqlite3.connect(db_path)
     try:
         paper_ids = deterministic_clean_papers(conn, args.limit)
-        papers, figures, curves, figure_refs = fetch_metadata(conn, paper_ids)
+        papers, figures, curves, figure_refs = fetch_metadata(
+            conn,
+            paper_ids,
+            # --metadata-only never upserts figures, so it does not pay for the
+            # result.json sweep.
+            assets_root=None if args.metadata_only else assets_root,
+            include_overlays=args.upload_overlays and not args.metadata_only,
+        )
     finally:
         conn.close()
 
@@ -464,12 +839,30 @@ def main() -> int:
         f"Selected {len(papers)} papers, {len(figures)} figures, "
         f"and {len(curves)} clean curves."
     )
+    print(summarize_verification(papers, [] if args.metadata_only else figures))
+    if not args.metadata_only:
+        unverified = [
+            figure["id"]
+            for figure in figures
+            if figure["verification_status"] == UNVERIFIED
+        ]
+        if unverified and not args.allow_unverified:
+            raise RuntimeError(
+                f"{len(unverified)} of {len(figures)} figures have no readable "
+                f"result.json under {assets_root} (first: {unverified[:3]}). "
+                "Refusing to publish them as 'axis_unverified', which could "
+                "downgrade a live 'flagged' figure to 'pending'. Attach the "
+                "assets volume, or pass --allow-unverified deliberately."
+            )
     if args.dry_run:
         missing = 0
         raw_bytes = 0
+        wanted = ("crop.png", "replot_qa.png")
+        if args.upload_overlays:
+            wanted = (*wanted, "overlay.png")
         for figure in figure_refs:
             base = assets_root / figure.paper_id / figure.figure_id
-            for name in ("crop.png", "replot_qa.png"):
+            for name in wanted:
                 path = base / name
                 if path.is_file():
                     raw_bytes += path.stat().st_size
@@ -501,6 +894,7 @@ def main() -> int:
                 assets_root,
                 figure,
                 args.force_assets,
+                args.upload_overlays,
             ): figure
             for figure in figure_refs
         }
