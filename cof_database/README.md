@@ -127,3 +127,47 @@ python3 scripts/import_pxrd_to_supabase.py --limit 1000 --metadata-only
 
 The metadata-only importer reads only `SUPABASE_URL` and
 `SUPABASE_SECRET_KEY`; it never loads or invokes a model-provider credential.
+
+## Crossref metadata backfill
+
+`journal`, `publication_year`, and `authors` are empty for every imported paper,
+so the site's journal and year filters, the paper `Meta` panel, and the CSV
+export all render blank. Every paper has a DOI, so the public Crossref REST API
+can supply those three fields and can also resolve the titles that embedded PDF
+metadata missed.
+
+The script is audit-only unless `--apply` is given. It makes no model calls and
+no Supabase calls; publishing is the separate `--metadata-only` import step.
+
+```bash
+# Audit only: writes a JSON report, touches no rows
+python3 scripts/backfill_crossref_metadata.py --limit 1000
+
+# Write journal, year, authors, and unresolved titles to local SQLite
+python3 scripts/backfill_crossref_metadata.py --limit 1000 --apply
+
+# Publish the result (paper metadata only, no asset upload)
+python3 scripts/import_pxrd_to_supabase.py --limit 1000 --metadata-only
+```
+
+Run it after `backfill_pdf_titles.py`, which resolves titles offline and leaves
+less for Crossref to fill.
+
+Batches of 50 DOIs cover the pilot in 20 requests. `--mailto ADDRESS` (or
+`CROSSREF_MAILTO`) opts into Crossref's polite pool for better rate limits; it
+is unset by default and no address is stored in the repository.
+
+Resolved titles are left alone, so the audit is the record of what Crossref
+would have said instead. Two exceptions are automatic: an unresolved title is
+filled, and a local title carrying mis-decoded bytes that Crossref renders
+cleanly is repaired. `--prefer-crossref-titles` replaces every diverging title.
+
+The publication year is the first usable of `published-print`,
+`published-online`, `issued`. `issued` alone is Crossref's earliest deposited
+date and runs a year early for the roughly 7% of this corpus that appeared
+online in December and in print the following January.
+
+Reruns are cheap: a paper carrying a Crossref timestamp is skipped unless
+`--refresh` is passed. A network or HTTP failure is never recorded as a Crossref
+verdict, so the affected papers stay untouched, the run exits non-zero, and the
+same command retries exactly those papers.
