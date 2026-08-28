@@ -21,12 +21,16 @@ dist/
 # ── research data & others' datasets (large, not ours to redistribute) ─
 # outputs/ = 15 GB run artifacts + pxrd.db
 # data/    = Peter Walther COF extraction dataset
-outputs/
+# No trailing slash on `outputs`: a trailing slash matches only a real
+# directory, so it would miss the path when a large tree is offloaded to
+# external storage and replaced by a symlink.
+outputs
 data/
 tmp/
 
 # ── copyrighted source PDFs — do not publish (~19 GB of journal PDFs) ──
-sample_papers/
+# No trailing slash, for the same reason as `outputs` above.
+sample_papers
 
 # ── unpublished research IP (kept out of the PUBLIC repo by default) ───
 # Delete a line here if you decide that item should be public.

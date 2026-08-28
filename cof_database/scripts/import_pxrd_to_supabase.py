@@ -179,13 +179,38 @@ def placeholders(items: list[str]) -> str:
     return ",".join("?" for _ in items)
 
 
+def safe_year(value: Any) -> int | None:
+    """Coerce a stored year, or None. Guards the Supabase 1800-2200 CHECK.
+
+    A single out-of-range value would fail the entire upsert batch, so anything
+    unparseable or out of range is dropped rather than sent.
+    """
+    try:
+        year = int(value)
+    except (TypeError, ValueError):
+        return None
+    return year if 1800 <= year <= 2200 else None
+
+
 def fetch_metadata(
     conn: sqlite3.Connection, paper_ids: list[str]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[FigureRef]]:
     marks = placeholders(paper_ids)
+    # journal / publication_year / authors are populated by
+    # backfill_crossref_metadata.py. They are selected only when the columns
+    # exist, so a database predating that backfill still imports. Sending them
+    # matters: the upsert below uses resolution=merge-duplicates, so emitting a
+    # hardcoded None here would overwrite live Supabase values with NULL.
+    present = {row[1] for row in conn.execute("PRAGMA table_info(papers)")}
+    optional = [
+        name
+        for name in ("journal", "publication_year", "authors")
+        if name in present
+    ]
+    selected = ["paper_id", "doi", "title", *optional]
     paper_rows = conn.execute(
         f"""
-        select paper_id, doi, title
+        select {", ".join(selected)}
         from papers
         where paper_id in ({marks})
         """,
@@ -193,19 +218,23 @@ def fetch_metadata(
     ).fetchall()
 
     rank = {paper_id: index + 1 for index, paper_id in enumerate(paper_ids)}
-    papers = [
-        {
-            "id": paper_id,
-            "paper_number": f"PXRD-{rank[paper_id]:05d}",
-            "doi": doi or None,
-            "title": title or paper_id,
-            "authors": None,
-            "journal": None,
-            "publication_year": None,
-            "source_url": f"https://doi.org/{doi}" if doi else None,
-        }
-        for paper_id, doi, title in paper_rows
-    ]
+    papers = []
+    for row in paper_rows:
+        record = dict(zip(selected, row))
+        paper_id = record["paper_id"]
+        doi = record["doi"]
+        papers.append(
+            {
+                "id": paper_id,
+                "paper_number": f"PXRD-{rank[paper_id]:05d}",
+                "doi": doi or None,
+                "title": record["title"] or paper_id,
+                "authors": record.get("authors") or None,
+                "journal": record.get("journal") or None,
+                "publication_year": safe_year(record.get("publication_year")),
+                "source_url": f"https://doi.org/{doi}" if doi else None,
+            }
+        )
 
     figure_rows = conn.execute(
         f"""
