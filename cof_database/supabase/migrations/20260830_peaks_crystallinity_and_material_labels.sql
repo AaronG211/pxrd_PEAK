@@ -1,3 +1,10 @@
+-- ⚠️  SUPABASE SQL EDITOR: strip the `begin;` / `commit;` in this file before
+--     pasting. The editor wraps your script in its own transaction; a nested one
+--     can fail partway, roll back everything, and still report "Success. No rows
+--     returned". Every statement here is individually guarded, so running them
+--     without an enclosing transaction is safe. See ../README.md, "Running
+--     migrations in the SQL editor". The wrapper is correct for psql; keep it.
+--
 -- Open PXRD Database migration: first-peak geometry, the unvetted peak list,
 -- COF crystallinity descriptors, cross-paper material LABEL groups, and an
 -- honest "nobody checked this yet" value for publication_status.
