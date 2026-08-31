@@ -49,13 +49,11 @@ create table if not exists public.pxrd_figures (
   crop_path text not null,
   digitized_plot_path text not null,
   overlay_path text,
-  -- 'reviewed' is RESERVED for a human-review workflow that does not exist.
-  -- No human has reviewed any figure in this database, so the importer never
-  -- emits it. 'flagged' means an automated check disputed the figure;
-  -- 'pending' means automated extraction passed its own checks and nothing
-  -- has reviewed it since.
+  -- Derived by the importer, never asserted. 'flagged' means an automated
+  -- check disputed the figure; 'pending' means nothing did.
   quality_status text not null default 'pending'
-    check (quality_status in ('reviewed', 'pending', 'flagged')),
+    constraint pxrd_figures_quality_status_check
+    check (quality_status in ('pending', 'flagged')),
   -- How the 2-theta axis calibration was established. The pipeline fits the
   -- axis twice, from detected tick marks and from OCR of the axis labels.
   verification_status text not null default 'axis_unverified'

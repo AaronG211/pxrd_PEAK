@@ -5,8 +5,9 @@ The importer is idempotent: metadata is upserted and existing Storage objects
 are skipped unless --force-assets is supplied. Images and CSVs are converted in
 memory, so no second multi-gigabyte staging tree is created on disk.
 
-Quality rule: `quality_status` is DERIVED, never asserted. No human has
-reviewed any figure in this database, so the importer never emits 'reviewed'.
+Quality rule: `quality_status` is DERIVED, never asserted. It has exactly two
+values, 'pending' and 'flagged'. There is no 'reviewed': no human reviews
+figures in this project, so the schema offers no way to claim one did.
 A figure is 'flagged' only when an automated check disputed it - the two
 independent 2-theta axis fits disagreed and needed a tie-break
 (calibration.status == 'arbitrated'), or not every detected series survived
@@ -408,11 +409,12 @@ def read_verification(result_path: Path) -> FigureVerification:
 def derive_quality_status(
     figure_status: str | None, verification_status: str
 ) -> tuple[str, tuple[str, ...]]:
-    """Return ('pending' | 'flagged', reasons). Never 'reviewed'.
+    """Return ('pending' | 'flagged', reasons).
 
-    No human has reviewed any figure in this database, so 'reviewed' is not a
-    value this importer is allowed to produce; it stays reserved for a
-    human-review workflow that does not exist yet.
+    Those are the only two values the column permits. A 'reviewed' state was
+    removed rather than reserved: nothing in this project can legally write it,
+    and leaving it in the CHECK would have let a future writer reintroduce the
+    green tick that 1,866 unreviewed figures once wore.
 
     'flagged' means an automated check DISPUTED the figure:
       axis_arbitrated    the tick-mark fit and the OCR fit disagreed by more
@@ -1264,7 +1266,8 @@ def summarize_verification(
         lines += [
             "quality_status: "
             + ", ".join(f"{name} {count}" for name, count in sorted(quality.items()))
-            + "  (no figure is ever 'reviewed'; no human has reviewed any of these)",
+            + "  ('pending' is the absence of a flag, not a pass; there is no "
+            "'reviewed' state and no human has reviewed any of these)",
             "  flagged because: "
             + (
                 ", ".join(
