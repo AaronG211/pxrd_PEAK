@@ -143,6 +143,10 @@ CURVE_TEXT_COLUMNS = {
 
 # tools/first_peak.py: CU_KA = 1.5406. Applied whenever the paper did not report
 # a usable wavelength, which in this corpus is every published curve.
+# Overlays are the biggest asset in the set; see webp_bytes for the measurement
+# that picked this over method=0 and over lossy WebP.
+OVERLAY_WEBP_METHOD = 4
+
 CU_KA_ANGSTROM = 1.5406
 WAVELENGTH_ASSUMED = "assumed_cu_ka"
 WAVELENGTH_REPORTED = "paper_reported"
@@ -1075,14 +1079,27 @@ def infer_role(context_role: str | None, label: str | None, state: str | None) -
     return "unclassified"
 
 
-def webp_bytes(path: Path) -> bytes:
+def webp_bytes(path: Path, method: int = 0) -> bytes:
+    """Lossless WebP. `method` trades encode time for size.
+
+    method=0 is ~7x faster and is what the source and digitized panels use; the
+    1,000-paper pilot stays comfortably below the Free-plan Storage ceiling on
+    those two alone.
+
+    Overlays need method=4. They are the largest asset in the set (measured over
+    the pilot: 467 KB as PNG, 257 KB at method=0, 159 KB at method=4), and at
+    method=0 the three image sets together project to 939 MiB against a 1024 MiB
+    ceiling. method=4 brings that to 761 MiB and costs about two minutes of CPU
+    across eight workers. Lossy WebP was measured and rejected: at q=90 the
+    trace pixels move by up to 127/255 and PSNR sits at 35 dB, because thin
+    saturated lines over a photographic crop are the worst case for DCT
+    ringing - and the overlay exists precisely so a reader can judge those
+    lines against the ink.
+    """
     with Image.open(path) as image:
         image.load()
         output = io.BytesIO()
-        # method=0 is ~7x faster than the higher-effort lossless encoder on the
-        # source figures. The 1,000-paper pilot still stays comfortably below
-        # the Free-plan Storage ceiling.
-        image.save(output, format="WEBP", lossless=True, method=0)
+        image.save(output, format="WEBP", lossless=True, method=method)
         return output.getvalue()
 
 
@@ -1142,7 +1159,11 @@ def upload_figure(
     ]
     if include_overlays:
         objects.append(
-            (f"{remote_base}/overlay.webp", lambda: webp_bytes(overlay), "image/webp")
+            (
+                f"{remote_base}/overlay.webp",
+                lambda: webp_bytes(overlay, method=OVERLAY_WEBP_METHOD),
+                "image/webp",
+            )
         )
     uploaded_bytes = 0
     for object_path, build, content_type in objects:
