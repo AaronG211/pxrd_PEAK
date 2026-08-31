@@ -13,13 +13,19 @@ export interface PlotPoint {
 
 export type Domain = [number, number];
 
-/** Round a rough interval up to the nearest 1, 2 or 5 times a power of ten. */
+/**
+ * Snap a rough interval to the nearest 1, 2 or 5 times a power of ten.
+ *
+ * The thresholds round to the *nearest* member of the family rather than always
+ * upward: a 5-90 deg axis asking for 8 intervals wants a step of 10 (9 ticks),
+ * not the 20 (4 ticks) that ceiling rounding produces.
+ */
 export function niceStep(rough: number): number {
   if (!Number.isFinite(rough) || rough <= 0) return 1;
   const exponent = Math.floor(Math.log10(rough));
   const magnitude = 10 ** exponent;
   const fraction = rough / magnitude;
-  const nice = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
+  const nice = fraction < 1.5 ? 1 : fraction < 3 ? 2 : fraction < 7 ? 5 : 10;
   return nice * magnitude;
 }
 
@@ -205,4 +211,47 @@ export function buildPath(
 export function formatDegrees(value: number, span: number): string {
   const decimals = span < 1 ? 3 : span < 10 ? 2 : 2;
   return value.toFixed(decimals);
+}
+
+/**
+ * Push a set of desired label positions apart so none overlap, staying inside
+ * `[lo, hi]` and moving each label as little as possible.
+ *
+ * Used to print a series number at the right-hand end of every trace, which is
+ * what stops curve identity from resting on stroke colour alone when several
+ * curves of one role are overlaid.
+ *
+ * Returns positions in the SAME ORDER as the input; the sort is internal.
+ */
+export function spreadLabels(
+  desired: number[],
+  minGap: number,
+  lo: number,
+  hi: number,
+): number[] {
+  const count = desired.length;
+  if (count === 0) return [];
+  const order = desired.map((_, index) => index).sort((a, b) => desired[a] - desired[b]);
+  const placed = new Array<number>(count);
+
+  // Forward pass: never place a label above the previous one plus the gap.
+  let cursor = lo;
+  for (const index of order) {
+    const value = Math.max(desired[index], cursor);
+    placed[index] = value;
+    cursor = value + minGap;
+  }
+
+  // If that overflowed the bottom, walk back up from `hi` so the whole stack
+  // stays in frame rather than the last few labels leaving it.
+  const lastIndex = order[order.length - 1];
+  if (placed[lastIndex] > hi) {
+    let ceiling = hi;
+    for (let k = order.length - 1; k >= 0; k -= 1) {
+      const index = order[k];
+      placed[index] = Math.min(placed[index], ceiling);
+      ceiling = placed[index] - minGap;
+    }
+  }
+  return placed;
 }

@@ -296,14 +296,49 @@ type CacheEntry = {
   controller: AbortController;
   waiters: number;
   settled: boolean;
+  /** Monotonic tick of the last read, for LRU eviction. */
+  lastUsed: number;
 };
 
 /**
  * Keyed by URL and populated with the IN-FLIGHT promise, so a StrictMode double
  * mount (or several figure cards sharing one bundle) issues a single request.
- * Successful results stay cached; failures are evicted so a retry can refetch.
+ * Failures are evicted so a retry can refetch.
+ *
+ * BOUNDED. A resolved entry holds the whole parsed point set: live bundles reach
+ * 18,072 points, about 1.3 MB of heap per figure, and this Map is module state in
+ * a single-page app, so router navigation never releases it. Unbounded, a session
+ * that browses ~100 figures accumulates roughly 130 MB reclaimable only by a full
+ * reload. Sixteen entries is far more than any one paper needs (the largest live
+ * paper has well under that many figures) while keeping the worst case near
+ * 20 MB.
  */
+const MAX_CACHED_FIGURES = 16;
 const cache = new Map<string, CacheEntry>();
+let cacheClock = 0;
+
+/**
+ * Drop least-recently-used settled entries until the cache is back in budget.
+ *
+ * An entry with waiters, or one still in flight, is never evicted: dropping it
+ * would orphan the promise its callers are already attached to and lose the
+ * de-duplication this cache exists for.
+ */
+function evictOverflow(): void {
+  while (cache.size > MAX_CACHED_FIGURES) {
+    let oldestKey: string | null = null;
+    let oldestTick = Infinity;
+    for (const [key, entry] of cache) {
+      if (!entry.settled || entry.waiters > 0) continue;
+      if (entry.lastUsed < oldestTick) {
+        oldestTick = entry.lastUsed;
+        oldestKey = key;
+      }
+    }
+    if (oldestKey === null) return;
+    cache.delete(oldestKey);
+  }
+}
 
 export function fetchFigureCurves(
   dataUrl: string,
@@ -318,6 +353,7 @@ export function fetchFigureCurves(
       controller,
       waiters: 0,
       settled: false,
+      lastUsed: (cacheClock += 1),
       promise: loadCurves(dataUrl, controller.signal),
     };
     // Every caller may abort before the shared request settles; keep its
@@ -333,10 +369,12 @@ export function fetchFigureCurves(
       },
     );
     cache.set(dataUrl, created);
+    evictOverflow();
     entry = created;
   }
 
   const active = entry;
+  active.lastUsed = (cacheClock += 1);
   active.waiters += 1;
 
   return new Promise<CurveSeries[]>((resolve, reject) => {
@@ -346,10 +384,21 @@ export function fetchFigureCurves(
       done = true;
       active.waiters -= 1;
       signal?.removeEventListener("abort", onAbort);
-      // The shared request is only cancelled once nobody is still waiting on it.
+      // The shared request is only cancelled once nobody is still waiting on it,
+      // and then only after the current task has finished.
+      //
+      // React StrictMode runs mount -> cleanup -> mount synchronously in one
+      // commit. Cancelling inline would abort the request during that window and
+      // the remount would either start a second one or, worse, attach to the
+      // promise we just rejected and surface a spurious "loading was cancelled"
+      // error. Deferring by a microtask lets the remount re-register as a waiter
+      // first, while a genuine navigate-away still cancels one tick later.
       if (active.waiters <= 0 && !active.settled) {
-        active.controller.abort();
-        if (cache.get(dataUrl) === active) cache.delete(dataUrl);
+        queueMicrotask(() => {
+          if (active.waiters > 0 || active.settled) return;
+          active.controller.abort();
+          if (cache.get(dataUrl) === active) cache.delete(dataUrl);
+        });
       }
     };
     function onAbort() {
