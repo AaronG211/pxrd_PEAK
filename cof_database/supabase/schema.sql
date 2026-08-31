@@ -15,20 +15,29 @@ create table if not exists public.pxrd_papers (
   journal text,
   publication_year integer check (publication_year between 1800 and 2200),
   source_url text,
-  -- Publication lifecycle, from Crossref. 'active' until a retraction,
-  -- withdrawal, expression of concern, or correction is detected.
-  publication_status text not null default 'active'
+  -- Publication lifecycle, from Crossref. 'unchecked' until a lookup happens,
+  -- then 'active' unless a retraction, withdrawal, expression of concern, or
+  -- correction is detected. 'unchecked' and 'active' are DIFFERENT claims: the
+  -- default must never assert a clean bill of health nobody earned.
+  publication_status text not null default 'unchecked'
     constraint pxrd_papers_publication_status_check
     check (publication_status in
-      ('active', 'retracted', 'withdrawn', 'concern', 'corrected')),
+      ('unchecked', 'active', 'retracted', 'withdrawn', 'concern', 'corrected')),
   publication_status_notice_doi text,
   publication_status_source text
     constraint pxrd_papers_publication_status_source_check
     check (publication_status_source is null or publication_status_source in
       ('crossref-update', 'crossref-title', 'manual')),
   publication_status_updated date,
+  -- The evidence that a lookup happened at all. Tied to the status below so
+  -- "nobody has checked" can never be stored as "checked and fine".
+  publication_status_checked_at timestamptz,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint pxrd_papers_publication_status_evidence_check check (
+    (publication_status = 'unchecked')
+    = (publication_status_checked_at is null)
+  )
 );
 
 create table if not exists public.pxrd_figures (
@@ -76,6 +85,39 @@ create table if not exists public.pxrd_figures (
   )
 );
 
+-- Cross-paper material LABEL groups. Curves are grouped when their published
+-- material labels normalise to the same string: a claim about LABEL AGREEMENT,
+-- never about verified material identity. Provenance is
+-- pxrd_curves.material_name only; no third-party dataset is read or derived
+-- from here. See scripts/material_labels.py.
+create table if not exists public.pxrd_material_groups (
+  id             text primary key,             -- = group_key, stable across imports
+  group_key      text not null unique,         -- normalised label, e.g. 'tppa1'
+  display_name   text not null,                -- most frequent RAW label, e.g. 'TpPa-1'
+  label_variants text[] not null default '{}', -- every raw label folded in
+  paper_count    integer not null default 0,
+  curve_count    integer not null default 0,
+  -- Both values are label agreement. There is deliberately no score: no
+  -- calibrated probability exists behind this, and inventing one would be the
+  -- overclaim the specificity gate exists to prevent.
+  match_basis    text not null default 'label_normalised'
+    constraint pxrd_material_groups_match_basis_check
+    check (match_basis in ('label_identical', 'label_normalised')),
+  -- The publish gate. Only 'specific' groups may be rendered; 'generic'
+  -- ("COF"), 'serial' ("COF-1") and 'paper_local' ("M-COF") are stored so the
+  -- refusals stay inspectable but never link anything.
+  specificity    text not null default 'specific'
+    constraint pxrd_material_groups_specificity_check
+    check (specificity in ('specific', 'paper_local', 'serial', 'generic')),
+  updated_at     timestamptz not null default now(),
+  constraint pxrd_material_groups_counts_check check (
+    paper_count >= 0
+    and curve_count >= 0
+    and curve_count >= paper_count
+    and cardinality(label_variants) >= 1
+  )
+);
+
 create table if not exists public.pxrd_curves (
   id text primary key,
   figure_id text not null references public.pxrd_figures(id) on delete cascade,
@@ -97,6 +139,48 @@ create table if not exists public.pxrd_curves (
   trace_confidence double precision,
   snap_rate double precision,
   mean_snap_residual_px double precision,
+  -- First-peak geometry. first_peak_snr is deliberately NOT published:
+  -- tools/first_peak.py floors sigma at 1e-3 * range, so SNR saturates at 1000
+  -- (pilot median 966). It measures how smooth our own vectorization was, not
+  -- signal quality.
+  first_peak_two_theta_deg double precision,
+  -- DERIVED, not measured: d = lambda / (2 sin(theta)) with the wavelength
+  -- below. Filtering by d is filtering by 2-theta under a unit relabel.
+  first_peak_d_angstrom double precision,
+  first_peak_fwhm_deg double precision,
+  first_peak_status text
+    constraint pxrd_curves_first_peak_status_check
+    check (first_peak_status is null or first_peak_status in (
+      'ok', 'low_confidence', 'truncated_at_window_start', 'no_bragg_peak')),
+  -- The wavelength the d-spacing was computed from, and where it came from.
+  -- 'assumed_cu_ka' (1.5406 A) for every curve in the present corpus.
+  first_peak_wavelength_angstrom double precision,
+  first_peak_wavelength_source text
+    constraint pxrd_curves_first_peak_wavelength_source_check
+    check (first_peak_wavelength_source is null
+           or first_peak_wavelength_source in ('assumed_cu_ka', 'paper_reported')),
+  -- Crystallinity descriptors. crystalline_fraction is
+  -- sum(y - rolling 10th-pct baseline over 4 deg) / sum(y - min(y)): the
+  -- fraction of intensity in features narrower than ~4 deg, NOT degree of
+  -- crystallinity, and strongly confounded by the plotted 2-theta span. Read it
+  -- beside two_theta_min / two_theta_max. stacking_hump_height is omitted: it is
+  -- in un-normalized units and is not comparable between curves.
+  crystalline_fraction double precision,
+  stacking_hump_status text
+    constraint pxrd_curves_stacking_hump_status_check
+    check (stacking_hump_status is null or stacking_hump_status in (
+      'hump_detected', 'no_hump_detected', 'window_not_covered', 'not_computed')),
+  stacking_hump_center_deg double precision,
+  stacking_hump_fwhm_deg double precision,
+  intensity_ratio_100_001 double precision,
+  descriptor_version text,
+  -- The UNGATED automatic peak list, ascending in two_theta:
+  -- [{"two_theta":..,"rel_height":..,"prominence":..}]. It passes none of the
+  -- physics gates behind first_peak_status. Any UI built on it must say so.
+  peaks jsonb,
+  peak_list_truncated boolean not null default false,
+  -- NULL means "not linked", never "unique material".
+  material_group_id text references public.pxrd_material_groups(id) on delete set null,
   sort_order integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -110,6 +194,46 @@ create table if not exists public.pxrd_curves (
     and (trace_confidence is null or (trace_confidence >= 0 and trace_confidence <= 1))
     and (snap_rate is null or (snap_rate >= 0 and snap_rate <= 1))
     and (mean_snap_residual_px is null or mean_snap_residual_px >= 0)
+  ),
+  constraint pxrd_curves_first_peak_range_check check (
+    (first_peak_two_theta_deg is null
+      or (first_peak_two_theta_deg > 0 and first_peak_two_theta_deg < 180))
+    and (first_peak_d_angstrom is null or first_peak_d_angstrom > 0)
+    and (first_peak_fwhm_deg is null
+      or (first_peak_fwhm_deg >= 0.05 and first_peak_fwhm_deg <= 3.0))
+    and (first_peak_wavelength_angstrom is null
+      or (first_peak_wavelength_angstrom > 0.4
+          and first_peak_wavelength_angstrom < 3.0))
+  ),
+  constraint pxrd_curves_first_peak_coherence_check check (
+    (first_peak_two_theta_deg is null) = (first_peak_d_angstrom is null)
+    and (first_peak_two_theta_deg is null) = (first_peak_fwhm_deg is null)
+    and (first_peak_two_theta_deg is null)
+        = (first_peak_wavelength_angstrom is null)
+    and (first_peak_wavelength_angstrom is null)
+        = (first_peak_wavelength_source is null)
+    and (first_peak_status not in ('truncated_at_window_start', 'no_bragg_peak')
+         or first_peak_two_theta_deg is null)
+  ),
+  constraint pxrd_curves_descriptor_range_check check (
+    (crystalline_fraction is null
+      or (crystalline_fraction >= 0 and crystalline_fraction <= 1))
+    and (stacking_hump_center_deg is null
+      or (stacking_hump_center_deg >= 15 and stacking_hump_center_deg <= 35))
+    and (stacking_hump_fwhm_deg is null or stacking_hump_fwhm_deg > 0)
+    and (intensity_ratio_100_001 is null or intensity_ratio_100_001 >= 0)
+  ),
+  -- Stops "not measured" from ever being stored as "no hump".
+  constraint pxrd_curves_descriptor_coherence_check check (
+    (stacking_hump_status = 'hump_detected'
+      or (stacking_hump_center_deg is null
+          and stacking_hump_fwhm_deg is null
+          and intensity_ratio_100_001 is null))
+    and (stacking_hump_status is distinct from 'not_computed'
+      or (crystalline_fraction is null and descriptor_version is null))
+  ),
+  constraint pxrd_curves_peaks_shape_check check (
+    peaks is null or jsonb_typeof(peaks) = 'array'
   )
 );
 
@@ -125,6 +249,74 @@ create index if not exists pxrd_figures_verification_status_idx
 create index if not exists pxrd_papers_publication_status_idx
   on public.pxrd_papers (publication_status)
   where publication_status <> 'active';
+-- 70.4% of published curves are first_peak_status 'ok'; the search gates on it.
+create index if not exists pxrd_curves_first_peak_search_idx
+  on public.pxrd_curves (first_peak_status, first_peak_two_theta_deg);
+create index if not exists pxrd_curves_first_peak_d_idx
+  on public.pxrd_curves (first_peak_d_angstrom)
+  where first_peak_d_angstrom is not null;
+create index if not exists pxrd_curves_stacking_hump_status_idx
+  on public.pxrd_curves (stacking_hump_status);
+create index if not exists pxrd_curves_material_group_idx
+  on public.pxrd_curves (material_group_id)
+  where material_group_id is not null;
+create index if not exists pxrd_material_groups_publishable_idx
+  on public.pxrd_material_groups (paper_count desc)
+  where specificity = 'specific' and paper_count > 1;
+
+-- Multi-peak search over the UNGATED peak list, server-side because it is
+-- highly selective: one peak at +/-0.1 deg returns 230 of 3,815 pilot curves,
+-- two return 26, three return 1. The tolerance is widened per curve to that
+-- curve's own axis uncertainty so it is never finer than the calibration
+-- supports, and tol_deg is clamped into [0.02, 1.0] to bound the work.
+create or replace function public.pxrd_search_peaks(
+  targets double precision[],
+  tol_deg double precision default 0.15,
+  require_status text[] default array['ok']
+)
+returns table (
+  curve_id text,
+  matched_two_theta double precision[],
+  min_prominence double precision,
+  effective_tol_deg double precision,
+  peak_list_truncated boolean
+)
+language sql
+stable
+security invoker
+set search_path = public, pg_temp
+as $$
+  select
+    c.id,
+    array_agg(m.two_theta order by m.two_theta),
+    min(m.prominence),
+    greatest(least(greatest(tol_deg, 0.02), 1.0),
+             coalesce(c.two_theta_uncertainty_deg, 0)),
+    bool_or(c.peak_list_truncated)
+  from public.pxrd_curves c
+  cross join lateral unnest(targets) as t(target)
+  cross join lateral (
+    select
+      (entry ->> 'two_theta')::double precision as two_theta,
+      (entry ->> 'prominence')::double precision as prominence
+    from jsonb_array_elements(c.peaks) as entry
+    where abs((entry ->> 'two_theta')::double precision - t.target)
+          <= greatest(least(greatest(tol_deg, 0.02), 1.0),
+                      coalesce(c.two_theta_uncertainty_deg, 0))
+    order by abs((entry ->> 'two_theta')::double precision - t.target)
+    limit 1
+  ) m
+  where c.peaks is not null
+    and array_length(targets, 1) between 1 and 8
+    and (require_status is null or c.first_peak_status = any (require_status))
+  group by c.id, c.two_theta_uncertainty_deg
+  having count(distinct t.target) = array_length(targets, 1);
+$$;
+
+revoke all on function public.pxrd_search_peaks(
+  double precision[], double precision, text[]) from public;
+grant execute on function public.pxrd_search_peaks(
+  double precision[], double precision, text[]) to anon, authenticated;
 
 create or replace view public.pxrd_paper_index
 with (security_invoker = true)
@@ -156,6 +348,13 @@ group by p.id;
 alter table public.pxrd_papers enable row level security;
 alter table public.pxrd_figures enable row level security;
 alter table public.pxrd_curves enable row level security;
+alter table public.pxrd_material_groups enable row level security;
+
+drop policy if exists "Public can read PXRD material groups" on public.pxrd_material_groups;
+create policy "Public can read PXRD material groups"
+  on public.pxrd_material_groups for select
+  to anon, authenticated
+  using (true);
 
 drop policy if exists "Public can read PXRD papers" on public.pxrd_papers;
 create policy "Public can read PXRD papers"
@@ -176,6 +375,7 @@ create policy "Public can read PXRD curves"
   using (true);
 
 grant select on public.pxrd_paper_index to anon, authenticated;
+grant select on public.pxrd_material_groups to anon, authenticated;
 
 insert into storage.buckets (id, name, public)
 values ('pxrd-assets', 'pxrd-assets', true)

@@ -19,12 +19,25 @@ Publication rule: `publication_status` is carried through from the local
 papers table, where `backfill_crossref_metadata.py` writes it. It is never
 invented here. An unrecognised local value aborts the run rather than being
 coerced to 'active', because coercion would silently unflag a retracted paper
-through the merge-duplicates upsert.
+through the merge-duplicates upsert. An ABSENT local value is not 'active'
+either: it is 'unchecked', and publishing it is refused by default because it
+too could unflag a live retraction. See --allow-unchecked-publication-status.
+
+Derived-quantity rule: a number is published with whatever it was derived from.
+d-spacing is computed from an assumed Cu K-alpha wavelength for every curve in
+this corpus, so the wavelength and its provenance travel in their own columns
+rather than living in a frontend caption. Descriptor availability is a
+four-state enum, because "no hump", "the hump region was never plotted" and "no
+descriptor was computed" are three different facts. Cross-paper material groups
+are LABEL agreement and are named that way throughout; see material_labels.py.
 
 Column rule: every optional column is emitted only when the local SQLite
 column exists. The upsert uses resolution=merge-duplicates, which builds its
 UPDATE SET list from the payload keys, so an omitted key preserves the live
-Supabase value while a hardcoded None would overwrite it.
+Supabase value while a hardcoded None would overwrite it. Every gate is
+TABLE-level, never row-level: PostgREST builds one column list per bulk insert
+and rejects a batch whose objects have differing key sets (PGRST102), so a key
+added under a per-row condition would fail up to 300 rows at once.
 """
 
 from __future__ import annotations
@@ -51,6 +64,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from PIL import Image
 
+# Sibling module in this directory; Python puts the script's own directory on
+# sys.path, so this works however the script is invoked.
+from material_labels import build_groups
+
 
 BUCKET = "pxrd-assets"
 SEED = "pxrd-free-pilot-v1"
@@ -76,15 +93,28 @@ UNVERIFIED = "axis_unverified"
 DISPUTED_AXIS = "axis_arbitrated"
 INCOMPLETE_FIGURE_STATUS = "partial"
 
-PUBLICATION_STATUSES = {"active", "retracted", "withdrawn", "concern", "corrected"}
+UNCHECKED_PUBLICATION_STATUS = "unchecked"
+PUBLICATION_STATUSES = {
+    UNCHECKED_PUBLICATION_STATUS,
+    "active",
+    "retracted",
+    "withdrawn",
+    "concern",
+    "corrected",
+}
 PUBLICATION_STATUS_SOURCES = {"crossref-update", "crossref-title", "manual"}
 # Written by backfill_crossref_metadata.py. Gated on publication_status.
+# crossref_fetched_at is the evidence that a lookup happened at all: the backfill
+# writes it in the same UPDATE as the status, so a status without it is a
+# corrupted local row rather than a verdict.
 PAPER_STATUS_COLUMNS = (
     "publication_status",
     "publication_status_notice_doi",
     "publication_status_source",
     "publication_status_updated",
+    "crossref_fetched_at",
 )
+
 # local SQLite curves column -> published pxrd_curves column, plus the CHECK
 # range each one must satisfy so a stray value cannot fail a 300-row batch.
 CURVE_FIDELITY_COLUMNS = {
@@ -92,7 +122,49 @@ CURVE_FIDELITY_COLUMNS = {
     "confidence": ("trace_confidence", 0.0, 1.0),
     "snap_rate": ("snap_rate", 0.0, 1.0),
     "mean_snap_residual_px": ("mean_snap_residual_px", 0.0, None),
+    # First-peak geometry. Ranges are the detector's own gates in
+    # tools/first_peak.py (FWHM_MIN 0.05, FWHM_MAX 3.0) plus physical bounds.
+    # first_peak_snr is deliberately absent: tools/first_peak.py floors sigma at
+    # 1e-3 * range, so SNR saturates at a ceiling of 1000 (pilot median 966). It
+    # measures how smooth our own vectorization was, not signal quality, and
+    # publishing it would invite exactly the misreading this database prevents.
+    "first_peak_two_theta": ("first_peak_two_theta_deg", 0.0, 180.0),
+    "first_peak_d_angstrom": ("first_peak_d_angstrom", 0.0, None),
+    "first_peak_fwhm_deg": ("first_peak_fwhm_deg", 0.05, 3.0),
 }
+# Text columns need their own map: bounded_float would silently null them.
+CURVE_TEXT_COLUMNS = {
+    "first_peak_status": (
+        "first_peak_status",
+        {"ok", "low_confidence", "truncated_at_window_start", "no_bragg_peak"},
+    ),
+}
+
+# tools/first_peak.py: CU_KA = 1.5406. Applied whenever the paper did not report
+# a usable wavelength, which in this corpus is every published curve.
+CU_KA_ANGSTROM = 1.5406
+WAVELENGTH_ASSUMED = "assumed_cu_ka"
+WAVELENGTH_REPORTED = "paper_reported"
+
+# local descriptors column -> published pxrd_curves column, with its CHECK range.
+# stacking_hump_height is deliberately absent: un-normalized relative-intensity
+# units (pilot 0.061-102.7), so it cannot be compared between curves.
+# intensity_ratio_100_001 is the scale-free form of the same quantity.
+DESCRIPTOR_COLUMNS = {
+    "crystalline_fraction": ("crystalline_fraction", 0.0, 1.0),
+    "stacking_hump_center_deg": ("stacking_hump_center_deg", 15.0, 35.0),
+    "stacking_hump_fwhm_deg": ("stacking_hump_fwhm_deg", 0.0, None),
+    "intensity_ratio_100_001": ("intensity_ratio_100_001", 0.0, None),
+}
+HUMP_DETECTED = "hump_detected"
+HUMP_ABSENT = "no_hump_detected"
+HUMP_WINDOW_NOT_COVERED = "window_not_covered"
+DESCRIPTOR_NOT_COMPUTED = "not_computed"
+
+# tools/build_db.py keeps the top 40 peaks BY PROMINENCE, so a capped list is
+# not merely short - it is non-monotone in 2-theta.
+PEAK_LIST_CAP = 40
+PEAK_ENTRY_KEYS = ("two_theta", "rel_height", "prominence")
 
 
 @dataclass(frozen=True)
@@ -364,7 +436,15 @@ def derive_quality_status(
 
 
 def coerce_publication_status(value: Any, paper_id: str) -> str:
-    status = str(value or "").strip().lower() or "active"
+    """Map a local publication_status to a published one. Never invents 'active'.
+
+    An absent local value means no Crossref lookup has been recorded for this
+    paper, which is not the same fact as "Crossref was asked and said nothing is
+    wrong". Publishing the first as the second would assert a clean bill of
+    health nobody earned, and the previous `or "active"` did exactly that: NULL,
+    "" and "   " all became an affirmative 'active'.
+    """
+    status = str(value or "").strip().lower() or UNCHECKED_PUBLICATION_STATUS
     if status not in PUBLICATION_STATUSES:
         raise ValueError(
             f"{paper_id}: local publication_status {value!r} is not one of "
@@ -373,6 +453,95 @@ def coerce_publication_status(value: Any, paper_id: str) -> str:
             "upsert merges duplicates."
         )
     return status
+
+
+def coerce_checked_at(value: Any, status: str, paper_id: str) -> str | None:
+    """The timestamp that makes `status` evidence rather than assertion.
+
+    Supabase enforces `(publication_status = 'unchecked') = (checked_at is
+    null)`, so an incoherent pair would fail a whole 200-row batch.
+    backfill_crossref_metadata.py writes crossref_fetched_at and
+    publication_status in the same UPDATE, so a verdict without a timestamp is a
+    corrupted local row and is refused rather than back-dated.
+    """
+    text = str(value or "").strip()
+    if status == UNCHECKED_PUBLICATION_STATUS:
+        return None
+    if not text:
+        raise ValueError(
+            f"{paper_id}: local publication_status is {status!r} but "
+            "crossref_fetched_at is empty, so nothing records that the lookup "
+            "happened. Refusing to publish a verdict with no evidence. Re-run "
+            "backfill_crossref_metadata.py --refresh --apply for this paper."
+        )
+    return text
+
+
+def coerce_enum(value: Any, allowed: set[str]) -> str | None:
+    """Coerce a stored enum member, or None. Guards the Supabase CHECK.
+
+    An unrecognised value is dropped rather than sent: one stray token would
+    fail the entire batch it travels in, not the single row that carries it.
+    """
+    text = str(value or "").strip().lower()
+    return text if text in allowed else None
+
+
+def derive_hump_status(descriptor: dict[str, Any] | None) -> str:
+    """Three facts that a single NULL would destroy, plus their absence.
+
+    'not_computed'       no descriptor row exists for this curve
+    'window_not_covered' fewer than 3 of the 15-35 deg window were plotted, so
+                         the figure simply cannot say. NO DATA.
+    'no_hump_detected'   the window was plotted and no hump was found. This is a
+                         REAL negative - a well-ordered sample - and a filter
+                         that merges it with the line above is lying.
+    'hump_detected'      a hump was fitted
+    """
+    if descriptor is None:
+        return DESCRIPTOR_NOT_COMPUTED
+    if not descriptor.get("hump_window_covered"):
+        return HUMP_WINDOW_NOT_COVERED
+    if descriptor.get("stacking_hump_center_deg") is None:
+        return HUMP_ABSENT
+    return HUMP_DETECTED
+
+
+def peak_list(raw: Any, n_peaks: Any) -> tuple[list[dict[str, float]] | None, bool]:
+    """Parse one curve's UNGATED peak list. Returns (entries, truncated).
+
+    The list comes from tools/build_db.py's bare `find_peaks(prominence = 0.03 *
+    range)` and passes none of the physics gates behind first_peak_status. It is
+    published so a multi-peak search can exist, and every surface built on it has
+    to say what it is. Unparseable input yields None, which publishes as SQL NULL
+    - "we have no list", not "this curve has no peaks".
+    """
+    if raw is None:
+        return None, False
+    try:
+        entries = json.loads(raw)
+    except (TypeError, ValueError):
+        return None, False
+    if not isinstance(entries, list):
+        return None, False
+    parsed: list[dict[str, float]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        two_theta = bounded_float(entry.get("two_theta"), minimum=0.0, maximum=180.0)
+        if two_theta is None:
+            continue
+        rel_height = bounded_float(entry.get("rel_height"), minimum=0.0, maximum=1.0)
+        prominence = bounded_float(entry.get("prominence"), minimum=0.0, maximum=1.0)
+        parsed.append(
+            {
+                "two_theta": two_theta,
+                "rel_height": rel_height,
+                "prominence": prominence,
+            }
+        )
+    parsed.sort(key=lambda item: item["two_theta"])
+    return parsed, bounded_int(n_peaks) == PEAK_LIST_CAP
 
 
 def coerce_publication_status_source(value: Any, paper_id: str) -> str | None:
@@ -407,8 +576,19 @@ def fetch_metadata(
     paper_ids: list[str],
     assets_root: Path | None = None,
     include_overlays: bool = False,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[FigureRef]]:
-    """Build the three upsert payloads.
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[FigureRef],
+    dict[str, int],
+]:
+    """Build the four upsert payloads, plus a tally of why figures were flagged.
+
+    The tally exists because no published column records the flag reason. It is
+    the run's audit trail: without it an operator can see that 139 figures are
+    flagged but not which check did the flagging.
 
     `assets_root` is where the pipeline run directories live. When it is given,
     each figure's result.json supplies the axis-calibration provenance that the
@@ -459,8 +639,12 @@ def fetch_metadata(
         if "publication_year" in present:
             paper["publication_year"] = safe_year(record.get("publication_year"))
         if "publication_status" in present:
-            paper["publication_status"] = coerce_publication_status(
+            status = coerce_publication_status(
                 record.get("publication_status"), paper_id
+            )
+            paper["publication_status"] = status
+            paper["publication_status_checked_at"] = coerce_checked_at(
+                record.get("crossref_fetched_at"), status, paper_id
             )
             if "publication_status_notice_doi" in present:
                 paper["publication_status_notice_doi"] = (
@@ -511,6 +695,7 @@ def fetch_metadata(
     figures: list[dict[str, Any]] = []
     figure_refs: list[FigureRef] = []
     figure_order: dict[str, int] = {}
+    flag_reasons: dict[str, int] = {}
     for figure_id, paper_id, label, page, caption, figure_status in figure_rows:
         order = figure_order.get(paper_id, 0)
         figure_order[paper_id] = order + 1
@@ -520,12 +705,18 @@ def fetch_metadata(
             if assets_root is not None
             else UNVERIFIED_FIGURE
         )
-        quality_status, _reasons = derive_quality_status(figure_status, verification.status)
+        quality_status, reasons = derive_quality_status(figure_status, verification.status)
+        for reason in reasons:
+            flag_reasons[reason] = flag_reasons.get(reason, 0) + 1
         figure: dict[str, Any] = {
             "id": figure_id,
             "paper_id": paper_id,
             "figure_label": label or None,
-            "page_number": page,
+            # Guarded like every newer column: the Supabase CHECK is
+            # `page_number is null or page_number > 0`, and one zero would fail
+            # the whole 100-row batch it travels in rather than its own row.
+            # Nothing in the corpus violates it today (min 1, max 46).
+            "page_number": bounded_int(page, minimum=1),
             "caption": caption or None,
             "crop_path": f"{base}/source.webp",
             "digitized_plot_path": f"{base}/digitized.webp",
@@ -551,8 +742,16 @@ def fetch_metadata(
     )
     curve_columns = {row[1] for row in conn.execute("PRAGMA table_info(curves)")}
     fidelity = [name for name in CURVE_FIDELITY_COLUMNS if name in curve_columns]
+    texts = [name for name in CURVE_TEXT_COLUMNS if name in curve_columns]
+    publish_wavelength = "first_peak_two_theta" in curve_columns
+    # The recorded provenance of the stored d-spacing. Selected separately from
+    # CURVE_FIDELITY_COLUMNS because it is evidence about another column, never
+    # published in its own right.
+    wavelength_flag_known = "first_peak_wavelength_assumed" in curve_columns
+    publish_peaks = "peaks_json" in curve_columns
     base_curve_columns = [
         "series_id",
+        "paper_id",
         "figure_id",
         "label",
         "material_name",
@@ -562,7 +761,11 @@ def fetch_metadata(
         "n_points",
         "n_peaks",
     ]
-    curve_select = [*base_curve_columns, *fidelity]
+    curve_select = [*base_curve_columns, *fidelity, *texts]
+    if wavelength_flag_known:
+        curve_select.append("first_peak_wavelength_assumed")
+    if publish_peaks:
+        curve_select.append("peaks_json")
     curve_rows = conn.execute(
         f"""
         select {", ".join("c." + name for name in curve_select)}
@@ -573,38 +776,275 @@ def fetch_metadata(
         paper_ids,
     ).fetchall()
 
+    descriptors = read_descriptors(conn, paper_ids)
+    wavelengths = read_wavelengths(conn, paper_ids)
+    # Cross-paper material LABEL groups, computed from material_name alone. See
+    # material_labels.py for why peter_match is not consulted: it cannot express
+    # cross-paper identity, and its only cross-paper field is third-party
+    # content this project may not redistribute.
+    # Indexed by name rather than position: curve_select's order is assembled
+    # from three lists and must stay free to change.
+    at = {name: index for index, name in enumerate(curve_select)}
+    label_groups, group_of_series = build_groups(
+        (row[at["series_id"]], row[at["paper_id"]], row[at["material_name"]])
+        for row in curve_rows
+    )
+
     curves: list[dict[str, Any]] = []
     curve_order: dict[str, int] = {}
+    wavelength_anomalies: dict[str, int] = {}
     for row in curve_rows:
         record = dict(zip(curve_select, row))
+        series_id = record["series_id"]
         figure_id = record["figure_id"]
         order = curve_order.get(figure_id, 0)
         curve_order[figure_id] = order + 1
         role = infer_role(
-            context_roles.get(record["series_id"]), record["label"], record["sample_state"]
+            context_roles.get(series_id), record["label"], record["sample_state"]
         )
-        paper_id = figure_id.rsplit("-p", 1)[0]
+        paper_id = record["paper_id"]
         curve: dict[str, Any] = {
-            "id": record["series_id"],
+            "id": series_id,
             "figure_id": figure_id,
-            "series_id": record["series_id"],
+            "series_id": series_id,
             "label": record["label"] or f"Series {order + 1}",
             "material_name": record["material_name"] or None,
             "curve_role": role,
             "sample_state": record["sample_state"] or None,
-            "two_theta_min": record["two_theta_min"],
-            "two_theta_max": record["two_theta_max"],
-            "point_count": record["n_points"] or 0,
-            "peak_count": record["n_peaks"],
+            "two_theta_min": bounded_float(record["two_theta_min"]),
+            "two_theta_max": bounded_float(record["two_theta_max"]),
+            "point_count": bounded_int(record["n_points"]) or 0,
+            "peak_count": bounded_int(record["n_peaks"]),
             "data_path": f"papers/{paper_id}/{figure_id}/curves.csv.gz",
             "in_clean_set": True,
+            # NULL means "not linked to any other paper by label". It never
+            # means "unique material", and the empty state must say so.
+            "material_group_id": group_of_series.get(series_id),
             "sort_order": order,
         }
+        # A reversed pair passes both single-column guards and still fails the
+        # table CHECK, so it needs a pairwise one. Dropping both is right:
+        # neither bound can be trusted once their order is wrong.
+        if (
+            curve["two_theta_min"] is not None
+            and curve["two_theta_max"] is not None
+            and curve["two_theta_min"] > curve["two_theta_max"]
+        ):
+            curve["two_theta_min"] = curve["two_theta_max"] = None
         for name in fidelity:
             target, low, high = CURVE_FIDELITY_COLUMNS[name]
             curve[target] = bounded_float(record[name], minimum=low, maximum=high)
+        for name in texts:
+            target, allowed = CURVE_TEXT_COLUMNS[name]
+            curve[target] = coerce_enum(record[name], allowed)
+        if publish_wavelength:
+            anomaly = apply_wavelength(
+                curve,
+                wavelengths.get(paper_id),
+                record.get("first_peak_wavelength_assumed"),
+                wavelength_flag_known,
+            )
+            if anomaly is not None:
+                wavelength_anomalies[anomaly] = wavelength_anomalies.get(anomaly, 0) + 1
+        if descriptors is not None:
+            apply_descriptors(curve, descriptors.get(series_id))
+        if publish_peaks:
+            entries, truncated = peak_list(record["peaks_json"], record["n_peaks"])
+            curve["peaks"] = entries
+            curve["peak_list_truncated"] = truncated
         curves.append(curve)
-    return papers, figures, curves, figure_refs
+
+    # Only groups that actually span papers are published, so the site never
+    # renders a one-paper label as if it were linkage. The refused ones are
+    # published too, with their specificity, so the gate stays inspectable - but
+    # no curve is ever allowed to point at one (build_groups assigns ids only to
+    # publishable groups).
+    groups = [
+        {
+            "id": group.group_key,
+            "group_key": group.group_key,
+            "display_name": group.display_name,
+            "label_variants": group.label_variants,
+            "paper_count": group.paper_count,
+            "curve_count": group.curve_count,
+            "match_basis": group.match_basis,
+            "specificity": group.specificity,
+        }
+        for group in sorted(label_groups.values(), key=lambda item: item.group_key)
+        if group.paper_count > 1
+    ]
+    if wavelength_anomalies.get("stale_paper_wavelength"):
+        count = wavelength_anomalies["stale_paper_wavelength"]
+        print(
+            f"NOTE: {count} curves carry a paper-reported wavelength that "
+            "tools/first_peak.py did not use; their d-spacing was computed from "
+            f"assumed Cu K-alpha {CU_KA_ANGSTROM} A and is published as such. "
+            "Rerun tools/first_peak.py to recompute d against the reported value."
+        )
+    if wavelength_anomalies.get("unverifiable_wavelength"):
+        count = wavelength_anomalies["unverifiable_wavelength"]
+        print(
+            f"NOTE: {count} curves have a first peak whose wavelength provenance "
+            "could not be confirmed from curves.first_peak_wavelength_assumed; "
+            "they are published as the corpus-wide Cu K-alpha assumption."
+        )
+    return papers, figures, curves, groups, figure_refs, flag_reasons
+
+
+def read_descriptors(
+    conn: sqlite3.Connection, paper_ids: list[str]
+) -> dict[str, dict[str, Any]] | None:
+    """Per-curve crystallinity descriptors, or None when the table is absent.
+
+    The None is load-bearing and is not the same as an empty dict. No local table
+    means "this database cannot speak about descriptors", and the caller must
+    then omit the columns entirely so merge-duplicates preserves whatever is
+    live. An empty dict would instead publish 'not_computed' for every curve and
+    NULL out a live descriptor set.
+
+    A curve missing from a non-None map has no descriptor row, which
+    derive_hump_status reports as 'not_computed' - a different fact again from a
+    low value. The pilot happens to have 100% coverage because
+    tools/descriptors.py reads the same clean_curves view the importer
+    publishes, but nothing here relies on that.
+    """
+    if not conn.execute(
+        "select 1 from sqlite_master where type='table' and name='descriptors'"
+    ).fetchone():
+        return None
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(descriptors)")}
+    wanted = [
+        name
+        for name in ("hump_window_covered", "version", *DESCRIPTOR_COLUMNS)
+        if name in columns
+    ]
+    selected = ["series_id", *wanted]
+    marks = placeholders(paper_ids)
+    rows = conn.execute(
+        f"""
+        select {", ".join("d." + name for name in selected)}
+        from descriptors d
+        join curves c on c.series_id = d.series_id
+        where c.in_clean_set=1 and c.paper_id in ({marks})
+        """,
+        paper_ids,
+    ).fetchall()
+    return {row[0]: dict(zip(selected, row)) for row in rows}
+
+
+def read_wavelengths(conn: sqlite3.Connection, paper_ids: list[str]) -> dict[str, float]:
+    """Per-paper mined wavelength, where a paper reported one at all.
+
+    tools/mine_contexts.py finds a machine-readable wavelength in exactly ONE
+    paper of the 2,370-paper corpus, and none of its curves are in the clean set.
+    Every published d-spacing is therefore Cu K-alpha assumed. The lookup exists
+    so that stops being true silently the day a paper does report one.
+    """
+    if "wavelength_angstrom" not in {
+        row[1] for row in conn.execute("PRAGMA table_info(papers)")
+    }:
+        return {}
+    marks = placeholders(paper_ids)
+    rows = conn.execute(
+        f"""
+        select paper_id, wavelength_angstrom
+        from papers
+        where paper_id in ({marks}) and wavelength_angstrom is not null
+        """,
+        paper_ids,
+    ).fetchall()
+    # tools/first_peak.py accepts a mined wavelength only inside (0.4, 3.0) and
+    # otherwise falls back to Cu K-alpha; the same band gates it here so the
+    # published wavelength always matches the one the d-spacing was computed from.
+    return {
+        paper_id: value
+        for paper_id, raw in rows
+        if (value := bounded_float(raw)) is not None and 0.4 < value < 3.0
+    }
+
+
+def apply_wavelength(
+    curve: dict[str, Any],
+    reported: float | None,
+    assumed_flag: Any = None,
+    known_flag: bool = False,
+) -> str | None:
+    """Attach the wavelength the d-spacing was computed from, plus where it came from.
+
+    Bragg's law needs a wavelength, and this corpus almost never has one, so
+    d = lambda / (2 sin(theta)) is computed from an ASSUMED Cu K-alpha 1.5406 A.
+    Carrying the assumption as two columns rather than a caption means a reuser
+    can filter on it, and a pattern actually collected on Mo K-alpha (0.7107 A)
+    is off by 2.17x in d whether or not anyone read the caption.
+
+    The authority on WHICH wavelength produced the stored d is
+    curves.first_peak_wavelength_assumed, written by tools/first_peak.py at the
+    time it computed the value - NOT papers.wavelength_angstrom, which can be
+    mined later and then describes a wavelength the stored d never used. This
+    function therefore reports the recorded flag and only falls back to the
+    paper table when the flag is unavailable.
+
+    Returns a short anomaly tag when the two sources disagree, or None.
+
+    The keys are always both present or both absent, because the Supabase CHECK
+    ties them to first_peak_two_theta_deg being non-null.
+    """
+    if curve.get("first_peak_two_theta_deg") is None:
+        curve["first_peak_wavelength_angstrom"] = None
+        curve["first_peak_wavelength_source"] = None
+        return None
+
+    if not known_flag:
+        # Pre-feature database: the flag column does not exist, so the paper
+        # table is the only evidence there is.
+        if reported is None:
+            curve["first_peak_wavelength_angstrom"] = CU_KA_ANGSTROM
+            curve["first_peak_wavelength_source"] = WAVELENGTH_ASSUMED
+        else:
+            curve["first_peak_wavelength_angstrom"] = reported
+            curve["first_peak_wavelength_source"] = WAVELENGTH_REPORTED
+        return None
+
+    flag = bounded_int(assumed_flag)
+    if flag == 1:
+        # first_peak.py assumed Cu K-alpha. A paper wavelength mined afterwards
+        # does not retroactively change the d that was already computed, so the
+        # assumption is published and the disagreement is surfaced instead.
+        curve["first_peak_wavelength_angstrom"] = CU_KA_ANGSTROM
+        curve["first_peak_wavelength_source"] = WAVELENGTH_ASSUMED
+        return "stale_paper_wavelength" if reported is not None else None
+    if flag == 0 and reported is not None:
+        curve["first_peak_wavelength_angstrom"] = reported
+        curve["first_peak_wavelength_source"] = WAVELENGTH_REPORTED
+        return None
+    # flag says a paper wavelength was used but the paper table no longer has
+    # one, or the flag is NULL beside a real peak. Either way the provenance is
+    # unverifiable; publish the corpus-wide assumption and count the row rather
+    # than assert a wavelength no evidence supports.
+    curve["first_peak_wavelength_angstrom"] = CU_KA_ANGSTROM
+    curve["first_peak_wavelength_source"] = WAVELENGTH_ASSUMED
+    return "unverifiable_wavelength"
+
+
+def apply_descriptors(curve: dict[str, Any], descriptor: dict[str, Any] | None) -> None:
+    """Attach the crystallinity block, keeping absence distinct from a low value.
+
+    Hump geometry is emitted only under 'hump_detected'. Supabase enforces the
+    same rule, so an inconsistent row would fail a whole 300-row batch rather
+    than quietly publish a width for a hump that was never found.
+    """
+    status = derive_hump_status(descriptor)
+    record: dict[str, Any] = descriptor if descriptor is not None else {}
+    curve["stacking_hump_status"] = status
+    curve["descriptor_version"] = str(record.get("version") or "").strip() or None
+    for name, (target, low, high) in DESCRIPTOR_COLUMNS.items():
+        value = bounded_float(record.get(name), minimum=low, maximum=high)
+        # Hump geometry exists only under 'hump_detected'. Publishing a width or
+        # a ratio beside 'window_not_covered' would be publishing a measurement
+        # of something the figure never showed.
+        if target != "crystalline_fraction" and status != HUMP_DETECTED:
+            value = None
+        curve[target] = value
 
 
 def infer_role(context_role: str | None, label: str | None, state: str | None) -> str:
@@ -722,8 +1162,87 @@ def upload_figure(
     return uploaded_bytes
 
 
+def tally(rows: list[dict[str, Any]], key: str) -> dict[str, int]:
+    """Count non-null values of `key`. NULL is counted separately by the caller,
+    because "no value" is never one of the enum members it would sit beside."""
+    counts: dict[str, int] = {}
+    for row in rows:
+        if row.get(key) is not None:
+            counts[str(row[key])] = counts.get(str(row[key]), 0) + 1
+    return counts
+
+
+def render_tally(counts: dict[str, int]) -> str:
+    return ", ".join(f"{name} {count}" for name, count in sorted(counts.items()))
+
+
+def summarize_curves(curves: list[dict[str, Any]], groups: list[dict[str, Any]]) -> str:
+    """What the derived per-curve columns actually say, in the run's own numbers."""
+    lines: list[str] = []
+    if not curves:
+        return ""
+    peak_status = tally(curves, "first_peak_status")
+    if peak_status:
+        lines.append("first_peak_status: " + render_tally(peak_status))
+        sources = tally(curves, "first_peak_wavelength_source")
+        if sources:
+            no_peak = sum(
+                1 for curve in curves if curve.get("first_peak_two_theta_deg") is None
+            )
+            lines.append(
+                "  d-spacing wavelength: "
+                + render_tally(sources)
+                + f"; {no_peak} curves have no first peak and therefore no "
+                f"d-spacing.  ('{WAVELENGTH_ASSUMED}' = Cu K-alpha "
+                f"{CU_KA_ANGSTROM} A, a default we chose, not a value any paper "
+                "reported. d is a restatement of 2-theta, not a measurement.)"
+            )
+    hump = tally(curves, "stacking_hump_status")
+    if hump:
+        lines.append(
+            "stacking_hump_status: "
+            + render_tally(hump)
+            + "  ('no_hump_detected' is a real negative; 'window_not_covered' "
+            "and 'not_computed' are absence of data, not low crystallinity)"
+        )
+    truncated = sum(1 for curve in curves if curve.get("peak_list_truncated"))
+    if any("peaks" in curve for curve in curves):
+        entries = sum(len(curve.get("peaks") or ()) for curve in curves)
+        lines.append(
+            f"unvetted peak list: {entries} entries over {len(curves)} curves; "
+            f"{truncated} curves are capped at {PEAK_LIST_CAP} peaks and are "
+            "therefore incomplete. This list passes none of the physics gates "
+            "behind first_peak_status."
+        )
+    if groups:
+        linked = sum(1 for curve in curves if curve.get("material_group_id"))
+        publishable = [
+            group
+            for group in groups
+            if group["specificity"] == "specific" and group["paper_count"] > 1
+        ]
+        widest = max((group["paper_count"] for group in publishable), default=0)
+        refused = render_tally(
+            {
+                name: count
+                for name, count in tally(groups, "specificity").items()
+                if name != "specific"
+            }
+        )
+        lines.append(
+            f"material label groups: {len(publishable)} of {len(groups)} "
+            f"multi-paper labels are specific enough to link, spanning up to "
+            f"{widest} papers each and covering {linked} curves."
+            + (f" Refused: {refused}." if refused else "")
+            + " These are LABEL agreement, never verified material identity."
+        )
+    return "\n".join(lines)
+
+
 def summarize_verification(
-    papers: list[dict[str, Any]], figures: list[dict[str, Any]]
+    papers: list[dict[str, Any]],
+    figures: list[dict[str, Any]],
+    flag_reasons: dict[str, int] | None = None,
 ) -> str:
     """One honest paragraph about what is actually being published."""
     quality: dict[str, int] = {}
@@ -746,25 +1265,49 @@ def summarize_verification(
             "quality_status: "
             + ", ".join(f"{name} {count}" for name, count in sorted(quality.items()))
             + "  (no figure is ever 'reviewed'; no human has reviewed any of these)",
+            "  flagged because: "
+            + (
+                ", ".join(
+                    f"{name} {count}" for name, count in sorted((flag_reasons or {}).items())
+                )
+                or "nothing"
+            ),
             "verification_status: "
             + ", ".join(f"{name} {count}" for name, count in sorted(verification.items())),
             f"{incomplete} figures did not digitize every detected series; "
             f"{with_omitted} omit at least one computed curve.",
         ]
+        if verification.get(UNVERIFIED) == len(figures):
+            # Loud, because every downstream number in this block is degraded:
+            # quality_status cannot see the axis_arbitrated flag reason either,
+            # so 'pending' here is the absence of a check, not a passed one.
+            lines.append(
+                "  WARNING: every figure is 'axis_unverified', which means no "
+                "result.json was readable at all - the assets volume is "
+                "detached or empty. quality_status above is degraded with it: "
+                "the axis_arbitrated flag reason cannot fire, so 'pending' is "
+                "the absence of a check rather than a passed one. These figures "
+                "must not be published from this run."
+            )
     statuses: dict[str, int] = {}
     for paper in papers:
         if "publication_status" in paper:
             key = paper["publication_status"]
             statuses[key] = statuses.get(key, 0) + 1
     if statuses:
-        lines.append(
-            "publication_status: "
-            + ", ".join(f"{name} {count}" for name, count in sorted(statuses.items()))
-        )
+        lines.append("publication_status: " + render_tally(statuses))
+        unchecked = statuses.get(UNCHECKED_PUBLICATION_STATUS, 0)
+        if unchecked:
+            lines.append(
+                f"  {unchecked} papers are 'unchecked': no Crossref lookup is "
+                "recorded for them. That is not the same claim as 'active'."
+            )
     else:
         lines.append(
-            "publication_status: not present locally; run "
-            "backfill_crossref_metadata.py --apply to detect retractions."
+            "publication_status: not present locally, so the four status "
+            "columns are omitted from the payload entirely and whatever is "
+            "already live is preserved. Run backfill_crossref_metadata.py "
+            "--apply to detect retractions."
         )
     return "\n".join(lines)
 
@@ -803,6 +1346,17 @@ def parse_args() -> argparse.Namespace:
             "'pending' through the merge-duplicates upsert"
         ),
     )
+    parser.add_argument(
+        "--allow-unchecked-publication-status",
+        action="store_true",
+        help=(
+            "Publish papers whose local publication_status is empty as "
+            "'unchecked'. Refused by default for the same reason as "
+            "--allow-unverified: merge-duplicates would overwrite a live "
+            "'retracted' with it. Fix the cause instead by running "
+            "backfill_crossref_metadata.py --apply"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -816,20 +1370,35 @@ def main() -> int:
     assets_root = args.assets_root.resolve()
     if not db_path.is_file():
         raise FileNotFoundError(db_path)
-    if not assets_root.is_dir():
-        raise FileNotFoundError(assets_root)
+    # The assets tree is required only by the modes that read it. --metadata-only
+    # passes assets_root=None and provably issues zero Storage requests, so
+    # demanding the volume for it blocked the paper-metadata sync on any machine
+    # without the drive attached, for nothing. --dry-run needs the tree to count
+    # what is missing, but its whole job is to survey a tree that may be
+    # incomplete, so it reports the absence instead of raising on it.
+    assets_available = assets_root.is_dir()
+    if not assets_available and not (args.metadata_only or args.dry_run):
+        raise FileNotFoundError(
+            f"{assets_root} is not a readable directory. Figures and curves need "
+            "the pipeline assets volume. --metadata-only publishes paper "
+            "metadata without it, and --dry-run reports what is missing."
+        )
     if args.limit < 1 or args.limit > 2000:
         raise ValueError("--limit must be between 1 and 2000")
 
     conn = sqlite3.connect(db_path)
     try:
         paper_ids = deterministic_clean_papers(conn, args.limit)
-        papers, figures, curves, figure_refs = fetch_metadata(
+        papers, figures, curves, groups, figure_refs, flag_reasons = fetch_metadata(
             conn,
             paper_ids,
             # --metadata-only never upserts figures, so it does not pay for the
-            # result.json sweep.
-            assets_root=None if args.metadata_only else assets_root,
+            # result.json sweep. Neither does a dry run against an absent tree.
+            assets_root=(
+                assets_root
+                if assets_available and not args.metadata_only
+                else None
+            ),
             include_overlays=args.upload_overlays and not args.metadata_only,
         )
     finally:
@@ -839,22 +1408,25 @@ def main() -> int:
         f"Selected {len(papers)} papers, {len(figures)} figures, "
         f"and {len(curves)} clean curves."
     )
-    print(summarize_verification(papers, [] if args.metadata_only else figures))
+    print(
+        summarize_verification(
+            papers, [] if args.metadata_only else figures, flag_reasons
+        )
+    )
     if not args.metadata_only:
-        unverified = [
-            figure["id"]
-            for figure in figures
-            if figure["verification_status"] == UNVERIFIED
-        ]
-        if unverified and not args.allow_unverified:
-            raise RuntimeError(
-                f"{len(unverified)} of {len(figures)} figures have no readable "
-                f"result.json under {assets_root} (first: {unverified[:3]}). "
-                "Refusing to publish them as 'axis_unverified', which could "
-                "downgrade a live 'flagged' figure to 'pending'. Attach the "
-                "assets volume, or pass --allow-unverified deliberately."
-            )
+        print(summarize_curves(curves, groups))
+
+    # A dry run is the tool you reach for precisely when the tree may be
+    # incomplete, so it reports before any guard can refuse the run.
     if args.dry_run:
+        if not assets_available:
+            print(
+                f"Dry run: {assets_root} is not readable, so all "
+                f"{len(figure_refs)} figures are missing their images and every "
+                "figure is reported as 'axis_unverified' above. That is the "
+                "state of this machine, not of the data."
+            )
+            return 1
         missing = 0
         raw_bytes = 0
         wanted = ("crop.png", "replot_qa.png")
@@ -871,6 +1443,36 @@ def main() -> int:
         print(f"Dry run: {missing} missing image assets; {raw_bytes / 1048576:.1f} MiB raw images.")
         return 0 if missing == 0 else 1
 
+    unchecked = [
+        paper["id"]
+        for paper in papers
+        if paper.get("publication_status") == UNCHECKED_PUBLICATION_STATUS
+    ]
+    if unchecked and not args.allow_unchecked_publication_status:
+        raise RuntimeError(
+            f"{len(unchecked)} of {len(papers)} papers have no local "
+            f"publication_status (first: {unchecked[:3]}). They would publish as "
+            "'unchecked', and because the upsert merges duplicates that could "
+            "overwrite a live 'retracted'. Run "
+            "`python3 scripts/backfill_crossref_metadata.py --all-papers "
+            "--limit 2370 --refresh --apply`, or pass "
+            "--allow-unchecked-publication-status deliberately."
+        )
+    if not args.metadata_only:
+        unverified = [
+            figure["id"]
+            for figure in figures
+            if figure["verification_status"] == UNVERIFIED
+        ]
+        if unverified and not args.allow_unverified:
+            raise RuntimeError(
+                f"{len(unverified)} of {len(figures)} figures have no readable "
+                f"result.json under {assets_root} (first: {unverified[:3]}). "
+                "Refusing to publish them as 'axis_unverified', which could "
+                "downgrade a live 'flagged' figure to 'pending'. Attach the "
+                "assets volume, or pass --allow-unverified deliberately."
+            )
+
     url = os.environ.get("SUPABASE_URL", "").strip()
     secret_key = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
     if not url or not secret_key:
@@ -881,6 +1483,17 @@ def main() -> int:
     if args.metadata_only:
         supabase.upsert("pxrd_papers", papers, 200)
         print(f"Metadata-only upsert complete for {len(papers)} papers.")
+        # Said out loud because it used to be silent. This mode writes exactly
+        # one table, and the deploy recipe that used it to "publish" the pilot
+        # never wrote a figure or a curve at all.
+        print(
+            "--metadata-only wrote pxrd_papers ONLY. pxrd_figures, pxrd_curves "
+            "and pxrd_material_groups were NOT written, no Storage object was "
+            "uploaded, and quality_status, verification_status, the peak and "
+            "crystallinity columns and the material label groups are unchanged "
+            "from whatever is already live. Run without --metadata-only, with "
+            "the assets volume attached, to publish those."
+        )
         return 0
 
     uploaded_bytes = 0
@@ -919,8 +1532,14 @@ def main() -> int:
 
     supabase.upsert("pxrd_papers", papers, 200)
     supabase.upsert("pxrd_figures", figures, 100)
+    # Groups must land before curves: pxrd_curves.material_group_id is a foreign
+    # key into this table.
+    supabase.upsert("pxrd_material_groups", groups, 200)
     supabase.upsert("pxrd_curves", curves, 300)
-    print("Metadata upsert complete.")
+    print(
+        f"Metadata upsert complete: {len(papers)} papers, {len(figures)} "
+        f"figures, {len(groups)} material label groups, {len(curves)} curves."
+    )
     return 0
 
 
