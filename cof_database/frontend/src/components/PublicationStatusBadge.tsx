@@ -1,14 +1,25 @@
-import { CircleAlert, TriangleAlert } from "lucide-react";
+import { CircleAlert, CircleHelp, TriangleAlert } from "lucide-react";
 import { PUBLICATION_STATUS_CLASS, PUBLICATION_STATUS_LABEL } from "../lib/publicationStatus";
 import type { PublicationStatus } from "../types";
 
-export function PublicationStatusBadge({ status }: { status: PublicationStatus }) {
+export function PublicationStatusBadge({
+  status,
+  showUnchecked = false,
+}: {
+  status: PublicationStatus;
+  /** The index badges every row, so "not checked" is disclosed on the detail
+   *  page only. See isPublisherNotice in lib/publicationStatus. */
+  showUnchecked?: boolean;
+}) {
   if (status === "active") return null;
+  if (status === "unchecked" && !showUnchecked) return null;
   const severe = status === "retracted" || status === "withdrawn";
   return (
     <span className={`badge ${PUBLICATION_STATUS_CLASS[status]}`}>
       {severe ? (
         <TriangleAlert className="mr-1 h-3 w-3" aria-hidden="true" />
+      ) : status === "unchecked" ? (
+        <CircleHelp className="mr-1 h-3 w-3" aria-hidden="true" />
       ) : (
         <CircleAlert className="mr-1 h-3 w-3" aria-hidden="true" />
       )}
