@@ -18,9 +18,12 @@ begin;
 -- ---------------------------------------------------------------------------
 -- 1. Figure-level machine verification
 -- ---------------------------------------------------------------------------
--- quality_status keeps its existing CHECK ('reviewed', 'pending', 'flagged').
--- 'reviewed' is now RESERVED for a human-review workflow that does not exist
--- yet, and the importer never emits it. See section 1c.
+-- quality_status loses 'reviewed' entirely. Reserving it for a human-review
+-- workflow kept a claim in the schema that this project has no way to make and
+-- no plan to make; a value nothing can legally write is not a reservation, it
+-- is an invitation for a future writer to reintroduce the false badge. The
+-- surviving pair is 'pending' (nothing to report) and 'flagged' (a specific
+-- automated problem). See section 1c for the collapse and the tightened CHECK.
 
 alter table public.pxrd_figures
   add column if not exists verification_status text not null default 'axis_unverified';
@@ -92,6 +95,14 @@ alter table public.pxrd_curves
 update public.pxrd_figures
 set quality_status = 'pending', updated_at = now()
 where quality_status = 'reviewed';
+
+-- Tightened only AFTER the collapse above, so the constraint can never be
+-- applied to rows that still carry the value it forbids.
+alter table public.pxrd_figures
+  drop constraint if exists pxrd_figures_quality_status_check;
+alter table public.pxrd_figures
+  add constraint pxrd_figures_quality_status_check
+  check (quality_status in ('pending', 'flagged'));
 
 create index if not exists pxrd_figures_verification_status_idx
   on public.pxrd_figures (verification_status);
