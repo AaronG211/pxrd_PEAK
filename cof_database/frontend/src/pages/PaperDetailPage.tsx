@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   ArrowLeft,
-  Bot,
   Download,
   ExternalLink,
   FileImage,
@@ -144,13 +143,15 @@ function FigureImage({
 }
 
 /**
- * Honest replacement for the old "reviewed" badge.
+ * Per-figure automated checks.
  *
- * `pxrd_figures.quality_status` was written as `'reviewed'` for every row by the
- * importer, so a green check claimed a human review that never happened. The
- * provenance badge below is deliberately identical on every figure, because that
- * is the same truth on every figure; the varying badges carry the automated
- * checks, and all of them stay silent until the verification columns exist.
+ * These badges carry only what VARIES between figures. The fact that nothing
+ * here was reviewed by a human is true of every figure equally, so it is stated
+ * once in the page-level "How is this verified?" panel rather than repeated as
+ * an identical chip on all 1,866 of them — a label that never changes is not
+ * information, and it crowds out the badges that are.
+ *
+ * All of these stay silent until the verification columns exist.
  */
 function FigureQualityBadges({ figure }: { figure: PxrdFigure }) {
   const agreement = figure.axisAgreementDeg;
@@ -160,11 +161,6 @@ function FigureQualityBadges({ figure }: { figure: PxrdFigure }) {
 
   return (
     <>
-      <span className="badge" title="No human has reviewed this extraction.">
-        <Bot className="mr-1 h-3 w-3" aria-hidden="true" />
-        Automated extraction · not human-reviewed
-      </span>
-
       {figure.verificationStatus === "axis_cross_validated" && (
         <span className="badge">2θ axis cross-checked</span>
       )}

@@ -9,12 +9,21 @@ export type CurveRole =
 /**
  * Mirrors the CHECK constraint on `pxrd_figures.quality_status`.
  *
- * `"reviewed"` is still a legal database value and is still present on live rows,
- * but no human has reviewed any figure — the importer wrote it unconditionally.
+ * The live database still carries the retired `"reviewed"` value until the
+ * 20260828 migration runs; that migration collapses it to `"pending"` and then
+ * tightens the CHECK so it can never be written again.
  * The UI therefore never renders it as an approval; see the provenance badge in
  * PaperDetailPage.
  */
-export type FigureQualityStatus = "reviewed" | "pending" | "flagged";
+/**
+ * 'pending' = nothing to report; 'flagged' = a specific automated problem
+ * (a disputed 2θ axis, or series detected but not digitized).
+ *
+ * There is no 'reviewed'. No human reviews figures in this project, so the
+ * type offers no way to say one did — the UI renders a badge only for
+ * 'flagged', and 'pending' is silent.
+ */
+export type FigureQualityStatus = "pending" | "flagged";
 
 /**
  * Outcome of the automated 2θ axis calibration, from `calibration.status` in each
