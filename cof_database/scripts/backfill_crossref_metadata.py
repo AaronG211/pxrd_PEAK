@@ -104,10 +104,23 @@ MAX_YEAR = 2200
 
 MISSING = object()
 YEAR_FIELDS = ("published-print", "published-online", "issued")
-# Classic UTF-8-decoded-as-Latin-1 signatures, plus the replacement character.
+# UTF-8 read as Latin-1/CP1252. The lead byte of a multi-byte sequence
+# surfaces as one of a small set of characters, and the continuation byte
+# lands anywhere in the Latin-1 supplement or, via CP1252, in its
+# punctuation block.
+#
+# An earlier form required a specific THIRD character and so missed every
+# sequence not ending in a quote mark. Measured against the live 1,000-paper
+# index it caught 0 of the 5 corrupted titles there: it did not match a
+# mis-encoded minus sign (U+00E2 U+02C6), a thin space (U+00E2 U+20AC), or a
+# double-encoded pi (U+00C3 U+00C2). Matching the lead byte plus ONE
+# continuation character is simpler and strictly wider.
 MOJIBAKE_MARKERS = re.compile(
-    "Ã[\u0080-\u00bf]|â€[\u0093\u0094\u0098\u0099\u009c\u009d]"
-    "|Â[\u00a0-\u00bf]|\ufffd"
+    "[\u00c3\u00c2\u00e2]"
+    "[\u0080-\u00ff\u0152-\u0178\u02c6\u02dc"
+    "\u2013\u2014\u2018-\u201e\u20ac\u2122\u2039\u203a"
+    "\u2020\u2021\u2026\u2030]"
+    "|\ufffd"
 )
 
 DOI_PATTERN = re.compile(r"^10\.\d{4,9}/\S+$")
