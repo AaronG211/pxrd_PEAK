@@ -143,9 +143,9 @@ CURVE_TEXT_COLUMNS = {
 
 # tools/first_peak.py: CU_KA = 1.5406. Applied whenever the paper did not report
 # a usable wavelength, which in this corpus is every published curve.
-# Overlays are the biggest asset in the set; see webp_bytes for the measurement
-# that picked this over method=0 and over lossy WebP.
-OVERLAY_WEBP_METHOD = 4
+# Every image asset is encoded at this effort. See webp_bytes for the
+# measurement behind it.
+WEBP_METHOD = 4
 
 CU_KA_ANGSTROM = 1.5406
 WAVELENGTH_ASSUMED = "assumed_cu_ka"
@@ -1079,22 +1079,26 @@ def infer_role(context_role: str | None, label: str | None, state: str | None) -
     return "unclassified"
 
 
-def webp_bytes(path: Path, method: int = 0) -> bytes:
-    """Lossless WebP. `method` trades encode time for size.
+def webp_bytes(path: Path, method: int = WEBP_METHOD) -> bytes:
+    """Lossless WebP. `method` trades encode time for size, never quality.
 
-    method=0 is ~7x faster and is what the source and digitized panels use; the
-    1,000-paper pilot stays comfortably below the Free-plan Storage ceiling on
-    those two alone.
+    method=4, not the encoder default of 0. Measured over the pilot, per image:
 
-    Overlays need method=4. They are the largest asset in the set (measured over
-    the pilot: 467 KB as PNG, 257 KB at method=0, 159 KB at method=4), and at
-    method=0 the three image sets together project to 939 MiB against a 1024 MiB
-    ceiling. method=4 brings that to 761 MiB and costs about two minutes of CPU
-    across eight workers. Lossy WebP was measured and rejected: at q=90 the
-    trace pixels move by up to 127/255 and PSNR sits at 35 dB, because thin
-    saturated lines over a photographic crop are the worst case for DCT
-    ringing - and the overlay exists precisely so a reader can judge those
-    lines against the ink.
+        crop.png     -> source.webp    305 KB at method=0, 177 KB at method=4
+        overlay.png  -> overlay.webp   257 KB at method=0, 159 KB at method=4
+
+    At method=0 the published pilot measured 1005 MiB against the Free plan's
+    1024 MiB ceiling - 98% full, with 19 MiB of headroom. At method=4 the same
+    bytes encode to 771 MiB. The cost is about two minutes of CPU across eight
+    workers for the whole pilot, one time. method=6 was measured and is not
+    worth it: 1 KB smaller per image for 30% more time.
+
+    Lossy WebP was measured and REJECTED, and should stay rejected. At q=90 the
+    overlay drops to 86 KB, but PSNR sits at 35 dB and trace pixels move by up
+    to 127/255: thin saturated lines over a photographic crop are the worst case
+    for DCT ringing, so the error lands exactly on the pixels the overlay exists
+    to show. Palette quantisation fails for the same reason - sampled overlays
+    carry up to 43,000 distinct colours.
     """
     with Image.open(path) as image:
         image.load()
@@ -1161,7 +1165,7 @@ def upload_figure(
         objects.append(
             (
                 f"{remote_base}/overlay.webp",
-                lambda: webp_bytes(overlay, method=OVERLAY_WEBP_METHOD),
+                lambda: webp_bytes(overlay),
                 "image/webp",
             )
         )
