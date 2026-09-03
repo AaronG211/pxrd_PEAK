@@ -3,8 +3,10 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { consumeAuthReturnTo, peekAuthReturnTo, useAuth } from "../auth/context";
 import { supabase } from "../lib/supabase";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 
 export function AuthCallbackPage() {
+  useDocumentTitle("Signing in");
   const navigate = useNavigate();
   const { signInWithGoogle } = useAuth();
   const started = useRef(false);

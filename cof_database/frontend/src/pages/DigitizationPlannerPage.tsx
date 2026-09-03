@@ -22,6 +22,7 @@ import {
   fetchDigitizationJobs,
 } from "../lib/digitization";
 import type { DigitizationJob, DigitizationJobStatus } from "../lib/digitization";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_FILES = 10;
@@ -66,6 +67,7 @@ function dateTime(value: string): string {
 }
 
 export function DigitizationPlannerPage() {
+  useDocumentTitle("Plan a digitization job");
   const inputRef = useRef<HTMLInputElement>(null);
   const { user, loading: authLoading, isConfigured, signInWithGoogle } = useAuth();
   const [files, setFiles] = useState<File[]>([]);
@@ -350,7 +352,7 @@ export function DigitizationPlannerPage() {
                     disabled={submitting}
                     value={value as string}
                     onChange={(event) => (setter as (next: string) => void)(event.target.value)}
-                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-slate-400 focus:ring-4 focus:ring-slate-100 disabled:bg-slate-50"
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm focus:border-slate-400 focus:ring-4 focus:ring-slate-100 disabled:bg-slate-50"
                   />
                 </label>
               ))}

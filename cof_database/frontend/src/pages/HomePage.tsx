@@ -42,6 +42,7 @@ import type {
 import { isPublisherNotice, publicationStatusLabel } from "../lib/publicationStatus";
 import type { CurveRole, PaperSummary } from "../types";
 import { useEffect } from "react";
+import { useDocumentTitle, SITE_TITLE } from "../hooks/useDocumentTitle";
 
 type SortOption = "paper-number" | "title" | "curves" | "figures";
 type MaterialScope = "all" | "named" | "multiple";
@@ -173,7 +174,7 @@ function exportManifest(
 
 function MaterialChips({ paper }: { paper: PaperSummary }) {
   if (paper.materialNames.length === 0) {
-    return <span className="text-xs text-slate-400">Not labeled</span>;
+    return <span className="text-xs text-slate-500">Not labeled</span>;
   }
   const visible = paper.materialNames.slice(0, 2);
   return (
@@ -233,9 +234,10 @@ function PaperIdentity({ paper }: { paper: PaperSummary }) {
 const FILTER_LABEL_CLASS =
   "mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500";
 const FILTER_FIELD_CLASS =
-  "inventory-select w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:ring-4 focus:ring-slate-100";
+  "inventory-select w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm focus:ring-4 focus:ring-slate-100";
 
 export function HomePage() {
+  useDocumentTitle(SITE_TITLE);
   const [papers, setPapers] = useState<PaperSummary[]>([]);
   const [labelIndex, setLabelIndex] = useState<MaterialLabelIndex>(
     EMPTY_MATERIAL_LABEL_INDEX,
@@ -597,7 +599,7 @@ export function HomePage() {
                   resetPage();
                 }}
                 placeholder="Search title, DOI, paper number, author, journal, or material..."
-                className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-10 text-sm text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-slate-400 focus:bg-white focus:ring-4 focus:ring-slate-100"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-10 text-sm text-slate-900 transition placeholder:text-slate-500 focus:border-slate-400 focus:bg-white focus:ring-4 focus:ring-slate-100"
               />
               {query && (
                 <button
@@ -1021,7 +1023,7 @@ export function HomePage() {
                       setSortBy(event.target.value as SortOption);
                       resetPage();
                     }}
-                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold text-slate-700 outline-none focus:ring-4 focus:ring-slate-100"
+                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs font-semibold text-slate-700 focus:ring-4 focus:ring-slate-100"
                   >
                     <option value="paper-number">Paper number</option>
                     <option value="title">Title A–Z</option>
@@ -1159,7 +1161,7 @@ export function HomePage() {
                         setPageSize(Number(event.target.value));
                         resetPage();
                       }}
-                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 font-semibold text-slate-700 outline-none"
+                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 font-semibold text-slate-700"
                     >
                       {PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
                     </select>
