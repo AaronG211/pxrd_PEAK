@@ -19,6 +19,7 @@ import { describeCurveDataError, fetchFigureCurves, isAbortError } from "../lib/
 import { EMPTY_MATERIAL_LABEL_INDEX, groupForLabel } from "../lib/materialGroups";
 import type { MaterialLabelGroup, MaterialLabelIndex } from "../lib/materialGroups";
 import { WAVELENGTH_ASSUMPTION_LONG } from "../lib/peakSearch";
+import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import type {
   CurveRole,
   FigureVerificationStatus,
@@ -74,7 +75,7 @@ const humpStatusStyles: Record<StackingHumpStatus, string> = {
   hump_detected: "border-amber-200 bg-amber-50 text-amber-800",
   no_hump_detected: "border-emerald-200 bg-emerald-50 text-emerald-700",
   window_not_covered: "border-dashed border-slate-300 bg-white text-slate-500",
-  not_computed: "border-dashed border-slate-300 bg-white text-slate-400",
+  not_computed: "border-dashed border-slate-300 bg-white text-slate-500",
 };
 
 const humpStatusLabels: Record<StackingHumpStatus, string> = {
@@ -374,9 +375,13 @@ function FigureVerification({ figure }: { figure: PxrdFigure }) {
 function FigurePlotSection({
   figure,
   csvUrl,
+  figureName,
 }: {
   figure: PxrdFigure;
   csvUrl: string | null | undefined;
+  /** The card's self-identifying name, so the plot does not build a second,
+   *  differently-worded one. See figureName in FigureCard. */
+  figureName: string;
 }) {
   const sectionRef = useRef<HTMLDivElement | null>(null);
   // No IntersectionObserver (very old browser, some test runners) means load eagerly
@@ -470,7 +475,7 @@ function FigurePlotSection({
       ) : series ? (
         <CurvePlot
           series={series}
-          figureLabel={figure.figureLabel || "this PXRD figure"}
+          figureLabel={figureName}
           verificationStatus={figure.verificationStatus}
         />
       ) : (
@@ -561,7 +566,7 @@ function CurveDescriptors({ figure }: { figure: PxrdFigure }) {
                 <td className="px-4 py-3">
                   {curve.stackingHumpStatus === null ? (
                     <span
-                      className="text-xs italic text-slate-400"
+                      className="text-xs italic text-slate-500"
                       title="No descriptor was computed for this curve. That is an absence of data, not a low value."
                     >
                       no descriptor computed
@@ -688,7 +693,7 @@ function FigureCard({
     // truncated_at_window_start and no_bragg_peak carry no position, and saying
     // WHY is more useful than an em-dash that reads like missing data.
     return curve.firstPeakStatus === null ? (
-      <span className="text-xs text-slate-400">—</span>
+      <span className="text-xs text-slate-500">—</span>
     ) : (
       <span className="text-xs text-slate-500">
         {firstPeakStatusLabels[curve.firstPeakStatus]}
@@ -696,21 +701,35 @@ function FigureCard({
     );
   };
 
+  // One self-identifying name, reused by the heading, the article, every image
+  // alt and both action controls. Panel letters repeat across a paper (a, b, f,
+  // g, h, a, b, ...), so the letter alone left 13 figures indistinguishable in
+  // every screen-reader navigation mode; the page number disambiguates them.
+  const figureName = figure.figureLabel
+    ? `Figure ${figure.figureLabel}${figure.pageNumber ? `, page ${figure.pageNumber}` : ""}`
+    : `PXRD figure ${index + 1}${figure.pageNumber ? `, page ${figure.pageNumber}` : ""}`;
+  const headingId = `${figure.id}-heading`;
+
   return (
     <article
       id={figure.id}
+      aria-labelledby={headingId}
       className="reveal-up scroll-mt-24 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
       style={{ animationDelay: `${index * 100}ms` }}
     >
       <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-5 sm:flex-row sm:items-start sm:justify-between md:px-7">
         <div>
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <h2 className="text-xl font-semibold text-slate-900">
+            <h2 id={headingId} className="text-xl font-semibold text-slate-900">
               {figure.figureLabel || `PXRD figure ${index + 1}`}
+              {/* Visible text stays the bare panel letter; the page number is
+                  already shown beside it, so it is added for assistive tech
+                  only rather than duplicated on screen. */}
+              {figure.pageNumber && <span className="sr-only">, page {figure.pageNumber}</span>}
             </h2>
             <FigureQualityBadges figure={figure} />
             {figure.pageNumber && (
-              <span className="text-xs font-medium text-slate-400">
+              <span className="text-xs font-medium text-slate-500">
                 page {figure.pageNumber}
               </span>
             )}
@@ -725,6 +744,7 @@ function FigureCard({
           <button
             type="button"
             onClick={copyFigureLink}
+            aria-label={`Copy link to ${figureName}`}
             className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
           >
             <Link2 className="h-4 w-4" />{" "}
@@ -734,6 +754,7 @@ function FigureCard({
             <a
               href={csvUrl}
               download
+              aria-label={`Download all curves for ${figureName} (.csv.gz)`}
               className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700"
             >
               <Download className="h-4 w-4" />
@@ -746,27 +767,27 @@ function FigureCard({
       <div className={`grid gap-px bg-slate-200 ${figure.overlayUrl ? "lg:grid-cols-3" : "lg:grid-cols-2"}`}>
         <FigureImage
           url={figure.sourceCropUrl}
-          alt={`Published source crop for ${figure.figureLabel || "PXRD figure"}`}
+          alt={`Published source crop for ${figureName}`}
           label="Source figure crop"
           icon={<FileImage className="h-4 w-4" />}
         />
         <FigureImage
           url={figure.digitizedPlotUrl}
-          alt={`Digitized traces for ${figure.figureLabel || "PXRD figure"}`}
+          alt={`Digitized traces for ${figureName}`}
           label="Digitized traces"
           icon={<ScanLine className="h-4 w-4" />}
         />
         {figure.overlayUrl && (
           <FigureImage
             url={figure.overlayUrl}
-            alt={`Source and digitized overlay for ${figure.figureLabel || "PXRD figure"}`}
+            alt={`Source and digitized overlay for ${figureName}`}
             label="Trace overlay"
             icon={<Activity className="h-4 w-4" />}
           />
         )}
       </div>
 
-      <FigurePlotSection figure={figure} csvUrl={csvUrl} />
+      <FigurePlotSection figure={figure} csvUrl={csvUrl} figureName={figureName} />
 
       <div className="p-5 md:p-7">
         <div className="mb-4">
@@ -961,6 +982,12 @@ export function PaperDetailPage() {
   const [paper, setPaper] = useState<PaperDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  // null while the record is still resolving, so the previous title stays put
+  // instead of flashing a placeholder. Falls back to the paper number when the
+  // title itself is the one thing we could not resolve.
+  useDocumentTitle(
+    paper ? (paper.hasResolvedTitle ? paper.title : paper.paperNumber) : error ? "Paper not available" : null,
+  );
   /**
    * The label index is a property of the whole collection, so one paper's own
    * payload cannot supply it. It is session-cached in lib/api: a reader who came
@@ -1000,8 +1027,18 @@ export function PaperDetailPage() {
       .then((data) => {
         if (active) setPaper(data);
       })
-      .catch(() => {
-        if (active) setError("This paper could not be found.");
+      .catch((cause: unknown) => {
+        if (!active) return;
+        // PGRST116 is PostgREST's "no rows" for .single(); anything else is a
+        // failed load. Reporting a network fault as "not found" told the reader
+        // the record does not exist when it does, and hid the retry that would
+        // have worked.
+        const code = (cause as { code?: string } | null)?.code;
+        setError(
+          code === "PGRST116"
+            ? "This paper could not be found."
+            : "This paper could not be loaded. Please check your connection and try again.",
+        );
       })
       .finally(() => {
         if (active) setIsLoading(false);
@@ -1030,7 +1067,7 @@ export function PaperDetailPage() {
             <div className="strategy-loader-ring" />
             <div className="strategy-loader-ring strategy-loader-ring-delay" />
           </div>
-          <p className="mt-6 text-center font-medium text-slate-400">Loading PXRD data...</p>
+          <p className="mt-6 text-center font-medium text-slate-500">Loading PXRD data...</p>
         </div>
       </section>
     );

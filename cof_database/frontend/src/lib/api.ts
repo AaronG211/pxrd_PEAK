@@ -164,7 +164,16 @@ function hasColumn(table: string, column: string): Promise<boolean> {
   const probe = (async () => {
     if (!supabase) return false;
     const { error } = await supabase.from(table).select(column).limit(1);
-    return !error;
+    if (!error) return true;
+    // Only PostgREST's "undefined column" answer means the column is genuinely
+    // absent. Treating every error as absence let one transient network blip
+    // during boot silently drop publication_status for the rest of the session,
+    // so a retracted paper rendered as an ordinary record with nothing to say
+    // the page was degraded. Anything else is a failed probe, not a verdict:
+    // do not cache it, so the next call re-probes.
+    if (error.code === "42703") return false;
+    columnProbes.delete(key);
+    throw error;
   })();
   columnProbes.set(key, probe);
   return probe;

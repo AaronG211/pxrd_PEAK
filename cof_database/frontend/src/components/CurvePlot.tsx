@@ -937,7 +937,7 @@ export function CurvePlot({
                   className="inline-block h-2.5 w-2.5 rounded-full"
                   style={{ backgroundColor: styles.get(item.seriesId)?.color }}
                 />
-                <span className="font-mono text-[10px] text-slate-400">
+                <span className="font-mono text-[10px] text-slate-600">
                   {seriesNumber(item.seriesId)}
                 </span>{" "}
                 <span className="font-semibold text-slate-700">{item.label}</span>{" "}
@@ -991,7 +991,7 @@ export function CurvePlot({
                 className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition ${
                   shown
                     ? "border-slate-300 bg-white text-slate-700"
-                    : "border-slate-200 bg-slate-50 text-slate-400"
+                    : "border-slate-200 bg-slate-50 text-slate-500"
                 } ${isLastVisible ? "cursor-not-allowed opacity-70" : ""}`}
               >
                 <svg width="22" height="8" aria-hidden="true" className="shrink-0">
@@ -1006,11 +1006,11 @@ export function CurvePlot({
                     strokeLinecap="round"
                   />
                 </svg>
-                <span className="font-mono text-[10px] text-slate-400">
+                <span className="font-mono text-[10px] text-slate-600">
                   {seriesNumber(item.seriesId)}
                 </span>
                 <span className="max-w-[13rem] truncate font-semibold">{item.label}</span>
-                <span className="capitalize text-slate-400">{item.role}</span>
+                <span className="capitalize text-slate-500">{item.role}</span>
                 <span className="sr-only">
                   {isLastVisible
                     ? " — shown, and the only plotted curve, so it cannot be hidden"
