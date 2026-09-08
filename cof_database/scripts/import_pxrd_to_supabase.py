@@ -147,6 +147,12 @@ CURVE_TEXT_COLUMNS = {
 # measurement behind it.
 WEBP_METHOD = 4
 
+# The two assets built from the publisher's own figure are published as
+# thumbnails, not as reproductions. See webp_bytes for the measurement and the
+# reasoning; digitized.webp is our own rendering and is exempt.
+PUBLISHER_ASSET_MAX_WIDTH = 640
+PUBLISHER_ASSET_QUALITY = 88
+
 CU_KA_ANGSTROM = 1.5406
 WAVELENGTH_ASSUMED = "assumed_cu_ka"
 WAVELENGTH_REPORTED = "paper_reported"
@@ -1079,31 +1085,54 @@ def infer_role(context_role: str | None, label: str | None, state: str | None) -
     return "unclassified"
 
 
-def webp_bytes(path: Path, method: int = WEBP_METHOD) -> bytes:
-    """Lossless WebP. `method` trades encode time for size, never quality.
+def webp_bytes(
+    path: Path,
+    method: int = WEBP_METHOD,
+    max_width: int | None = None,
+    quality: int | None = None,
+) -> bytes:
+    """WebP for one asset. Lossless and full-size unless bounded.
 
-    method=4, not the encoder default of 0. Measured over the pilot, per image:
+    `method` trades encode time for size, never quality. method=4, not the
+    encoder default of 0: measured over the pilot, crop.png encodes to 305 KB at
+    method=0 and 177 KB at method=4, for about two minutes of CPU across eight
+    workers for the whole corpus, once. method=6 buys 1 KB per image for 30%
+    more time and is not worth it.
 
-        crop.png     -> source.webp    305 KB at method=0, 177 KB at method=4
-        overlay.png  -> overlay.webp   257 KB at method=0, 159 KB at method=4
+    OUR OWN OUTPUT stays lossless and full-size. digitized.webp is a plot this
+    project drew; nothing is gained by degrading it and it is 16 KB either way.
 
-    At method=0 the published pilot measured 1005 MiB against the Free plan's
-    1024 MiB ceiling - 98% full, with 19 MiB of headroom. At method=4 the same
-    bytes encode to 771 MiB. The cost is about two minutes of CPU across eight
-    workers for the whole pilot, one time. method=6 was measured and is not
-    worth it: 1 KB smaller per image for 30% more time.
+    THE PUBLISHER'S PIXELS are bounded, by `max_width` and `quality`. source.webp
+    and overlay.webp are built from the journal's own figure, and publishing them
+    losslessly at 1501 px meant serving a pixel-exact, full-resolution copy of a
+    copyrighted work - at 3.5x the ~430 px the page ever displays. Bounding them
+    to 640 px at q=88 changes nothing a reader can see, and it moves the artefact
+    from a reproduction toward a thumbnail. Measured over all 3,694 clean-set
+    figures, source + overlay together:
 
-    Lossy WebP was measured and REJECTED, and should stay rejected. At q=90 the
-    overlay drops to 86 KB, but PSNR sits at 35 dB and trace pixels move by up
-    to 127/255: thin saturated lines over a photographic crop are the worst case
-    for DCT ringing, so the error lands exactly on the pixels the overlay exists
-    to show. Palette quantisation fails for the same reason - sampled overlays
-    carry up to 43,000 distinct colours.
+        full-resolution lossless   1110 MiB   (Free plan ceiling is 1024 MiB)
+        640 px lossless             528 MiB
+        640 px q=88                 180 MiB
+
+    The earlier rejection of lossy WebP still stands for the ORIGINALS on disk
+    and for anything meant to be measured from: at q=90 a full-size overlay moves
+    trace pixels by up to 127/255, because thin saturated lines over a
+    photographic crop are the worst case for DCT ringing. That argument is about
+    fidelity to the ink at full resolution. These are display thumbnails; the
+    measurable artefact is curves.csv.gz, which is exact and unaffected.
     """
     with Image.open(path) as image:
         image.load()
+        if max_width is not None and image.width > max_width:
+            height = round(image.height * max_width / image.width)
+            image = image.resize((max_width, height), Image.LANCZOS)
         output = io.BytesIO()
-        image.save(output, format="WEBP", lossless=True, method=method)
+        if quality is None:
+            image.save(output, format="WEBP", lossless=True, method=method)
+        else:
+            if image.mode not in ("RGB", "RGBA"):
+                image = image.convert("RGB")
+            image.save(output, format="WEBP", quality=quality, method=method)
         return output.getvalue()
 
 
@@ -1158,14 +1187,27 @@ def upload_figure(
 
     remote_base = f"papers/{figure.paper_id}/{figure.figure_id}"
     objects = [
-        (f"{remote_base}/source.webp", lambda: webp_bytes(source), "image/webp"),
+        (
+            f"{remote_base}/source.webp",
+            lambda: webp_bytes(
+                source,
+                max_width=PUBLISHER_ASSET_MAX_WIDTH,
+                quality=PUBLISHER_ASSET_QUALITY,
+            ),
+            "image/webp",
+        ),
+        # Our own plot: lossless, full size.
         (f"{remote_base}/digitized.webp", lambda: webp_bytes(digitized), "image/webp"),
     ]
     if include_overlays:
         objects.append(
             (
                 f"{remote_base}/overlay.webp",
-                lambda: webp_bytes(overlay),
+                lambda: webp_bytes(
+                    overlay,
+                    max_width=PUBLISHER_ASSET_MAX_WIDTH,
+                    quality=PUBLISHER_ASSET_QUALITY,
+                ),
                 "image/webp",
             )
         )
