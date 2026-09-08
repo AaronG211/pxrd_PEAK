@@ -2,18 +2,20 @@ import { useMemo, useState } from "react";
 import {
   Activity,
   ArrowUpRight,
+  BookOpen,
   ChevronLeft,
   ChevronRight,
   Database,
   Download,
   FileText,
   FlaskConical,
+  ScanLine,
   Search,
   SlidersHorizontal,
   X,
 } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Hero } from "../components/Hero";
+import { CorpusMasthead } from "../components/CorpusMasthead";
 import { PublicationStatusBadge } from "../components/PublicationStatusBadge";
 import {
   fetchCurveSearchCapabilities,
@@ -90,19 +92,6 @@ const NO_CURVE_MATCHES: ReadonlyMap<string, number> = new Map<string, number>();
 type CurveSearchOutcome =
   | { criteria: CurveSearchCriteria; status: "ready"; result: CurveSearchResult }
   | { criteria: CurveSearchCriteria; status: "error"; message: string };
-
-function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
-      <p className="text-2xl font-semibold tracking-tight text-slate-900">
-        {value.toLocaleString()}
-      </p>
-      <p className="mt-1 text-xs font-semibold uppercase tracking-wider text-slate-500">
-        {label}
-      </p>
-    </div>
-  );
-}
 
 function csvCell(value: string | number | null): string {
   const text = value === null ? "" : String(value);
@@ -616,31 +605,21 @@ export function HomePage() {
 
   return (
     <>
-      <Hero />
+      <CorpusMasthead
+        papers={papers.length}
+        figures={figureCount}
+        curves={curveCount}
+        loading={isLoading}
+      />
 
-      <section id="browse" className="section-container scroll-mt-20 py-12 md:py-16">
-        <div className="mb-8 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <div className="mb-3 flex flex-wrap items-center gap-3">
-              <h2 className="text-3xl font-semibold tracking-tight text-slate-900">
-                Browse the collection
-              </h2>
-              {!isSupabaseConfigured && (
-                <span className="badge border-sky-200 bg-sky-50 text-sky-700">
-                  Demo snapshot
-                </span>
-              )}
-            </div>
-            <p className="max-w-2xl text-slate-600">
-              Search publications, DOI records, material names, and experimental states.
-            </p>
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <Stat label="Papers" value={papers.length} />
-            <Stat label="Figures" value={figureCount} />
-            <Stat label="Curves" value={curveCount} />
-          </div>
-        </div>
+      <section id="browse" className="section-container scroll-mt-20 py-6 md:py-8">
+        {!isSupabaseConfigured && (
+          <p className="mb-4">
+            <span className="badge border-sky-200 bg-sky-50 text-sky-700">
+              Demo snapshot — three records, no live database
+            </span>
+          </p>
+        )}
 
         <div className="inventory-filter-card mb-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
           <div className="flex flex-col gap-3 lg:flex-row">
@@ -671,6 +650,67 @@ export function HomePage() {
                 </button>
               )}
             </label>
+
+            {/* Peak position sits in the top bar, not in the drawer.
+                It is the one query this database can answer that a list of
+                papers cannot — "I measured a peak at 3.4 degrees, what matches?"
+                — and it was three clicks and two screens down. Everything that
+                narrows an already-known paper stays behind Filters.
+
+                Fixed widths only from lg: at 375 px the three controls summed to
+                ~384 px and the tolerance select was clipped off-screen, so on a
+                phone they share the row instead. */}
+            {canSearchPeaks && (
+              <div className="flex w-full gap-2 lg:w-auto lg:shrink-0">
+                <label className="min-w-0 flex-1 lg:w-28 lg:flex-none">
+                  <span className="sr-only">Units for the first peak search</span>
+                  <select
+                    value={peakUnit}
+                    onChange={(event) => {
+                      setPeakUnit(event.target.value as PeakUnit);
+                      resetPage();
+                    }}
+                    className="h-full w-full rounded-xl border border-slate-200 bg-white px-2.5 text-sm font-semibold text-slate-700 focus:ring-4 focus:ring-slate-100"
+                  >
+                    {PEAK_UNIT_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="min-w-0 flex-1 lg:w-32 lg:flex-none">
+                  <span className="sr-only">First peak position value</span>
+                  <input
+                    inputMode="decimal"
+                    value={peakValue}
+                    onChange={(event) => {
+                      setPeakValue(event.target.value);
+                      resetPage();
+                    }}
+                    placeholder={peakUnit === "two-theta" ? "e.g. 3.4" : "e.g. 26.1"}
+                    aria-invalid={peakParse.error !== null}
+                    className="h-full w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-900 transition placeholder:text-slate-500 focus:border-slate-400 focus:bg-white focus:ring-4 focus:ring-slate-100"
+                  />
+                </label>
+                <label className="min-w-0 flex-1 lg:w-32 lg:flex-none">
+                  <span className="sr-only">Match tolerance</span>
+                  <select
+                    value={peakTolerance}
+                    onChange={(event) => {
+                      setPeakTolerance(Number(event.target.value));
+                      resetPage();
+                    }}
+                    className="h-full w-full rounded-xl border border-slate-200 bg-white px-2.5 text-sm font-semibold text-slate-700 focus:ring-4 focus:ring-slate-100"
+                  >
+                    {TOLERANCE_CHOICES.map((choice) => (
+                      <option key={choice} value={choice}>±{choice}° 2θ</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
+
             <button
               type="button"
               onClick={() => setFiltersOpen((open) => !open)}
@@ -686,6 +726,19 @@ export function HomePage() {
               )}
             </button>
           </div>
+
+          {peakParse.error && (
+            <p className="mt-2 text-xs font-medium text-rose-700" role="alert">
+              {peakParse.error}
+            </p>
+          )}
+          {!peakParse.error && peakUnit === "d-spacing" && peakParse.target && (
+            <p className="mt-2 text-xs text-slate-600">
+              d = {peakParse.target.enteredValue} Å is{" "}
+              <span className="font-mono">{peakParse.target.twoThetaDeg.toFixed(3)}° 2θ</span>{" "}
+              under the assumed wavelength. The search runs on the angle.
+            </p>
+          )}
 
           {filtersOpen && (
             <>
@@ -807,77 +860,6 @@ export function HomePage() {
                     matches, and the result count below tells you how many curves that was.
                   </p>
                   <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                    {canSearchPeaks && (
-                      <>
-                        <div className="sm:col-span-2">
-                          <span className={FILTER_LABEL_CLASS}>First peak position</span>
-                          <div className="flex gap-2">
-                            <label className="flex-1">
-                              <span className="sr-only">
-                                First peak position value
-                              </span>
-                              <input
-                                inputMode="decimal"
-                                value={peakValue}
-                                onChange={(event) => {
-                                  setPeakValue(event.target.value);
-                                  resetPage();
-                                }}
-                                placeholder={peakUnit === "two-theta" ? "e.g. 3.4" : "e.g. 26.1"}
-                                aria-invalid={peakParse.error !== null}
-                                className={FILTER_FIELD_CLASS}
-                              />
-                            </label>
-                            <label className="w-32 shrink-0">
-                              <span className="sr-only">Units for the first peak search</span>
-                              <select
-                                value={peakUnit}
-                                onChange={(event) => {
-                                  setPeakUnit(event.target.value as PeakUnit);
-                                  resetPage();
-                                }}
-                                className={FILTER_FIELD_CLASS}
-                              >
-                                {PEAK_UNIT_OPTIONS.map((option) => (
-                                  <option key={option.value} value={option.value}>
-                                    {option.label}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                          </div>
-                          {peakParse.error && (
-                            <p className="mt-1.5 text-xs font-medium text-rose-700" role="alert">
-                              {peakParse.error}
-                            </p>
-                          )}
-                          {!peakParse.error && peakUnit === "d-spacing" && peakParse.target && (
-                            <p className="mt-1.5 text-xs text-slate-600">
-                              d = {peakParse.target.enteredValue} Å is{" "}
-                              <span className="font-mono">
-                                {peakParse.target.twoThetaDeg.toFixed(3)}° 2θ
-                              </span>{" "}
-                              under the assumed wavelength. The search runs on the angle.
-                            </p>
-                          )}
-                        </div>
-                        <label className="block">
-                          <span className={FILTER_LABEL_CLASS}>Tolerance</span>
-                          <select
-                            value={peakTolerance}
-                            onChange={(event) => {
-                              setPeakTolerance(Number(event.target.value));
-                              resetPage();
-                            }}
-                            className={FILTER_FIELD_CLASS}
-                          >
-                            {TOLERANCE_CHOICES.map((choice) => (
-                              <option key={choice} value={choice}>±{choice}° 2θ</option>
-                            ))}
-                          </select>
-                        </label>
-                      </>
-                    )}
                     {canSearchDescriptors && humpOptions.length > 1 && (
                       <label className="block">
                         <span className={FILTER_LABEL_CLASS}>Stacking hump</span>
@@ -1282,12 +1264,48 @@ export function HomePage() {
               Built for verification
             </h2>
           </div>
-          <p className="leading-relaxed text-slate-600">
-            This database publishes digitized PXRD as a traceable research asset,
-            not as an opaque replacement for the source. Original figure crops,
-            curve labels, provenance, and downloadable data stay together so
-            researchers can inspect quality before reusing a trace.
-          </p>
+          <div>
+            <p className="leading-relaxed text-slate-600">
+              This database publishes digitized PXRD as a traceable research asset,
+              not as an opaque replacement for the source. Original figure crops,
+              curve labels, provenance, and downloadable data stay together so
+              researchers can inspect quality before reusing a trace.
+            </p>
+            {/* These three claims used to be tiles in the hero. They are worth
+                stating once, here, rather than charging every returning visitor
+                a screenful to re-read them. */}
+            <dl className="mt-6 grid gap-x-8 gap-y-5 sm:grid-cols-3">
+              <div>
+                <dt className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <BookOpen className="h-4 w-4 text-slate-500" aria-hidden="true" />
+                  Paper-linked
+                </dt>
+                <dd className="mt-1 text-sm leading-relaxed text-slate-600">
+                  Each curve stays connected to its paper, page, figure and DOI.
+                </dd>
+              </div>
+              <div>
+                <dt className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <ScanLine className="h-4 w-4 text-slate-500" aria-hidden="true" />
+                  Visually auditable
+                </dt>
+                <dd className="mt-1 text-sm leading-relaxed text-slate-600">
+                  The published crop sits beside the reconstructed trace and their
+                  overlay, so a reader can judge the fit against the ink.
+                </dd>
+              </div>
+              <div>
+                <dt className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <Download className="h-4 w-4 text-slate-500" aria-hidden="true" />
+                  Downloadable
+                </dt>
+                <dd className="mt-1 text-sm leading-relaxed text-slate-600">
+                  Exact 2θ / intensity data per figure, for analysis, benchmarking
+                  and method development.
+                </dd>
+              </div>
+            </dl>
+          </div>
         </div>
       </section>
     </>
