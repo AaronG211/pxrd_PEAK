@@ -42,7 +42,7 @@ import type {
 import { isPublisherNotice, publicationStatusLabel } from "../lib/publicationStatus";
 import type { CurveRole, PaperSummary } from "../types";
 import { useEffect } from "react";
-import { useDocumentTitle, SITE_TITLE } from "../hooks/useDocumentTitle";
+import { usePageMeta, SITE_TITLE } from "../hooks/usePageMeta";
 
 type SortOption = "paper-number" | "title" | "curves" | "figures";
 type MaterialScope = "all" | "named" | "multiple";
@@ -237,7 +237,6 @@ const FILTER_FIELD_CLASS =
   "inventory-select w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm focus:ring-4 focus:ring-slate-100";
 
 export function HomePage() {
-  useDocumentTitle(SITE_TITLE);
   const [papers, setPapers] = useState<PaperSummary[]>([]);
   const [labelIndex, setLabelIndex] = useState<MaterialLabelIndex>(
     EMPTY_MATERIAL_LABEL_INDEX,
@@ -258,7 +257,6 @@ export function HomePage() {
   const [curveSearch, setCurveSearch] = useState<CurveSearchOutcome | null>(null);
   const [sortBy, setSortBy] = useState<SortOption>("paper-number");
   const [pageSize, setPageSize] = useState(25);
-  const [page, setPage] = useState(1);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
@@ -272,6 +270,49 @@ export function HomePage() {
    */
   const [searchParams, setSearchParams] = useSearchParams();
   const labelKey = searchParams.get("label") ?? "";
+
+  /**
+   * The page lives in the URL, not in component state.
+   *
+   * As React state it was invisible to everything outside the tab: a crawler
+   * following links saw only page 1, so 1,975 of the 2,000 paper pages had no
+   * discoverable path, and a reader could not share or bookmark "page 12 of the
+   * results" or return to it with the back button. The API below is unchanged,
+   * so the ~19 resetPage() call sites in the filter controls keep working.
+   */
+  const page = Math.max(1, Number(searchParams.get("page") ?? "1") || 1);
+
+  const setPage = (next: number | ((current: number) => number)) => {
+    const value = typeof next === "function" ? next(page) : next;
+    const params = new URLSearchParams(searchParams);
+    // Page 1 is the canonical, param-free URL — otherwise every filter change
+    // would leave "?page=1" behind and split one page across two addresses.
+    if (value > 1) params.set("page", String(value));
+    else params.delete("page");
+    // push, not replace: paging is navigation and belongs in the back button.
+    setSearchParams(params);
+  };
+
+  usePageMeta({
+    title: SITE_TITLE,
+    description:
+      "Powder X-ray diffraction patterns recovered from 2,000 published papers. "
+      + "Every curve keeps its source figure, its digitized trace and downloadable "
+      + "2-theta / intensity data, so the extraction stays inspectable.",
+    // Filter params are dropped from the canonical: labels and peak windows are
+    // facets of one collection, and there are combinatorially many of them.
+    // Pagination is kept, because /?page=7 is a distinct set of records.
+    canonical: page > 1 ? `/?page=${page}` : "/",
+    jsonLd: {
+      "@context": "https://schema.org",
+      "@type": "DataCatalog",
+      name: SITE_TITLE,
+      description:
+        "Digitized powder X-ray diffraction patterns extracted from the "
+        + "published literature, each linked to its source figure and DOI.",
+      url: "https://pxrd-peak.vercel.app/",
+    },
+  });
 
   const setLabelKey = (next: string) => {
     const params = new URLSearchParams(searchParams);
@@ -520,6 +561,15 @@ export function HomePage() {
     return entries.filter((entry) => entry.count === null || entry.count > 0);
   }, [capabilities]);
 
+  /** The address of another page of these same results, filters preserved. */
+  const pageHref = (target: number) => {
+    const params = new URLSearchParams(searchParams);
+    if (target > 1) params.set("page", String(target));
+    else params.delete("page");
+    const query = params.toString();
+    return query ? `/?${query}` : "/";
+  };
+
   const totalPages = Math.max(1, Math.ceil(filteredPapers.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pageStart = (currentPage - 1) * pageSize;
@@ -537,7 +587,13 @@ export function HomePage() {
     + Number(criteria.humpFilter !== "all")
     + Number(criteria.ratioBand !== "all");
 
-  const resetPage = () => setPage(1);
+  const resetPage = () => {
+    if (!searchParams.has("page")) return;
+    const params = new URLSearchParams(searchParams);
+    params.delete("page");
+    // replace: narrowing a filter is not a navigation step worth a history entry.
+    setSearchParams(params, { replace: true });
+  };
   const clearFilters = () => {
     setQuery("");
     setMaterialQuery("");
@@ -1167,31 +1223,47 @@ export function HomePage() {
                     </select>
                   </label>
                   <nav className="flex items-center gap-2" aria-label="Paper index pages">
-                    <button
-                      type="button"
-                      disabled={currentPage === 1}
-                      // Stepped from the CLAMPED page, not the raw one. `page` can
-                      // otherwise sit above `totalPages` after a filter narrows the
-                      // result — every control calls resetPage, but the curve search
-                      // narrows asynchronously with no control to hang that on — and
-                      // Previous would then decrement a number nobody can see while
-                      // the visible page stayed put.
-                      onClick={() => setPage(Math.max(1, currentPage - 1))}
-                      className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      <ChevronLeft className="h-4 w-4" /> Previous
-                    </button>
+                    {/* Real links, not buttons. A crawler can only walk the corpus
+                        if the next page has an address; these carry the current
+                        filters forward so a shared URL reproduces what was on
+                        screen. Stepped from the CLAMPED page: `page` can sit above
+                        `totalPages` after the curve search narrows asynchronously,
+                        and Previous would otherwise decrement a number nobody sees. */}
+                    {currentPage === 1 ? (
+                      <span
+                        aria-disabled="true"
+                        className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 opacity-40"
+                      >
+                        <ChevronLeft className="h-4 w-4" /> Previous
+                      </span>
+                    ) : (
+                      <Link
+                        to={pageHref(currentPage - 1)}
+                        rel="prev"
+                        className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        <ChevronLeft className="h-4 w-4" /> Previous
+                      </Link>
+                    )}
                     <span className="min-w-24 text-center text-xs font-medium text-slate-600">
                       Page {currentPage} of {totalPages}
                     </span>
-                    <button
-                      type="button"
-                      disabled={currentPage === totalPages}
-                      onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
-                      className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Next <ChevronRight className="h-4 w-4" />
-                    </button>
+                    {currentPage === totalPages ? (
+                      <span
+                        aria-disabled="true"
+                        className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 opacity-40"
+                      >
+                        Next <ChevronRight className="h-4 w-4" />
+                      </span>
+                    ) : (
+                      <Link
+                        to={pageHref(currentPage + 1)}
+                        rel="next"
+                        className="inline-flex h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        Next <ChevronRight className="h-4 w-4" />
+                      </Link>
+                    )}
                   </nav>
                 </div>
               </>

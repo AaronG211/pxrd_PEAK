@@ -22,7 +22,7 @@ import {
   fetchDigitizationJobs,
 } from "../lib/digitization";
 import type { DigitizationJob, DigitizationJobStatus } from "../lib/digitization";
-import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { usePageMeta } from "../hooks/usePageMeta";
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_FILES = 10;
@@ -67,7 +67,9 @@ function dateTime(value: string): string {
 }
 
 export function DigitizationPlannerPage() {
-  useDocumentTitle("Plan a digitization job");
+  // An auth-gated planning tool: nothing to index, and it must not compete
+  // with the corpus for crawl budget.
+  usePageMeta({ title: "Plan a digitization job", noIndex: true });
   const inputRef = useRef<HTMLInputElement>(null);
   const { user, loading: authLoading, isConfigured, signInWithGoogle } = useAuth();
   const [files, setFiles] = useState<File[]>([]);
