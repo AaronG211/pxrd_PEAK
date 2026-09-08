@@ -19,7 +19,7 @@ import { describeCurveDataError, fetchFigureCurves, isAbortError } from "../lib/
 import { EMPTY_MATERIAL_LABEL_INDEX, groupForLabel } from "../lib/materialGroups";
 import type { MaterialLabelGroup, MaterialLabelIndex } from "../lib/materialGroups";
 import { WAVELENGTH_ASSUMPTION_LONG } from "../lib/peakSearch";
-import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { usePageMeta } from "../hooks/usePageMeta";
 import type {
   CurveRole,
   FigureVerificationStatus,
@@ -985,9 +985,69 @@ export function PaperDetailPage() {
   // null while the record is still resolving, so the previous title stays put
   // instead of flashing a placeholder. Falls back to the paper number when the
   // title itself is the one thing we could not resolve.
-  useDocumentTitle(
-    paper ? (paper.hasResolvedTitle ? paper.title : paper.paperNumber) : error ? "Paper not available" : null,
-  );
+  usePageMeta({
+    title: paper
+      ? paper.hasResolvedTitle
+        ? paper.title
+        : paper.paperNumber
+      : error
+        ? "Paper not available"
+        : null,
+    description: paper
+      ? `${paper.curveCount} digitized PXRD ${paper.curveCount === 1 ? "curve" : "curves"}`
+        + ` from ${paper.figureCount} ${paper.figureCount === 1 ? "figure" : "figures"}`
+        + `${paper.journal ? ` in ${paper.journal}` : ""}${paper.year ? ` (${paper.year})` : ""}.`
+        + ` Source crop, digitized trace and downloadable 2-theta / intensity data`
+        + `${paper.doi ? `, linked to DOI ${paper.doi}` : ""}.`
+      : undefined,
+    canonical: paperId ? `/paper/${encodeURIComponent(paperId)}` : undefined,
+    // A record that does not exist still answers 200 from the SPA rewrite, so
+    // the only signal available to say "this is not a page" is a robots tag.
+    noIndex: Boolean(error),
+    // Dataset, not ScholarlyArticle: the indexable thing here is the extracted
+    // diffraction data, and the paper is its source. This is the shape Google
+    // Dataset Search reads.
+    jsonLd: paper
+      ? {
+          "@context": "https://schema.org",
+          "@type": "Dataset",
+          name: paper.hasResolvedTitle
+            ? `Digitized PXRD data from: ${paper.title}`
+            : `Digitized PXRD data (${paper.paperNumber})`,
+          description:
+            `${paper.curveCount} powder X-ray diffraction curves digitized from `
+            + `${paper.figureCount} published figure(s), with the source crop preserved `
+            + `beside each reconstructed trace.`,
+          identifier: paper.doi ? `https://doi.org/${paper.doi}` : undefined,
+          creator: paper.authors
+            ? paper.authors.split(",").map((name) => ({ "@type": "Person", name: name.trim() }))
+            : undefined,
+          keywords: [
+            "powder X-ray diffraction",
+            "PXRD",
+            "XRD",
+            ...paper.materialNames.slice(0, 12),
+          ],
+          isBasedOn: paper.doi ? `https://doi.org/${paper.doi}` : undefined,
+          includedInDataCatalog: {
+            "@type": "DataCatalog",
+            name: "Open PXRD Database",
+            url: "https://pxrd-peak.vercel.app/",
+          },
+          distribution: paper.figures
+            .flatMap((figure) => figure.curves.filter((curve) => curve.dataUrl).slice(0, 1))
+            .map((curve) => ({
+              "@type": "DataDownload",
+              encodingFormat: "text/csv",
+              contentUrl: curve.dataUrl,
+            })),
+          variableMeasured: [
+            { "@type": "PropertyValue", name: "2-theta", unitText: "degree" },
+            { "@type": "PropertyValue", name: "Relative intensity", unitText: "arbitrary unit" },
+          ],
+        }
+      : null,
+  });
   /**
    * The label index is a property of the whole collection, so one paper's own
    * payload cannot supply it. It is session-cached in lib/api: a reader who came

@@ -1,10 +1,26 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { useAuth } from "./auth/context";
 import { Header } from "./components/Header";
 import { AuthCallbackPage } from "./pages/AuthCallbackPage";
 import { DigitizationPlannerPage } from "./pages/DigitizationPlannerPage";
 import { HomePage } from "./pages/HomePage";
 import { PaperDetailPage } from "./pages/PaperDetailPage";
+
+/**
+ * Remounted per paper id so the previous record cannot survive a navigation.
+ *
+ * Without the key, moving between papers kept the old object in state for the
+ * duration of the fetch, and moving to a paper that does not exist kept it
+ * indefinitely: the visible page showed its error branch, but the document
+ * title, meta description and Dataset JSON-LD still described the paper the
+ * reader had left — so a crawler on a 404 URL read structured data for a
+ * different record. Keying the route is React's own answer to "reset state when
+ * a prop changes", and avoids resetting it from inside an effect.
+ */
+function PaperDetailRoute() {
+  const { paperId } = useParams();
+  return <PaperDetailPage key={paperId ?? "none"} />;
+}
 
 function DigitizationRoute() {
   const { user } = useAuth();
@@ -24,7 +40,7 @@ function App() {
       <main id="main-content" className="flex-grow">
         <Routes>
           <Route path="/" element={<HomePage />} />
-          <Route path="/paper/:paperId" element={<PaperDetailPage />} />
+          <Route path="/paper/:paperId" element={<PaperDetailRoute />} />
           <Route path="/digitize" element={<DigitizationRoute />} />
           <Route path="/auth/callback" element={<AuthCallbackPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
