@@ -315,16 +315,77 @@ class Supabase:
                 )
 
 
-def deterministic_clean_papers(conn: sqlite3.Connection, limit: int) -> list[str]:
-    rows = conn.execute(
-        "select distinct paper_id from curves where in_clean_set=1"
-    ).fetchall()
-    paper_ids = [row[0] for row in rows]
-    ranked = sorted(
-        paper_ids,
-        key=lambda paper_id: hashlib.sha256(f"{SEED}:{paper_id}".encode()).hexdigest(),
-    )
-    return ranked[:limit]
+def deterministic_publishable_papers(conn: sqlite3.Connection, limit: int) -> list[str]:
+    """Papers to publish, in the order that fixes their PXRD accession number.
+
+    The list position becomes `paper_number`, so this ordering is a permanent
+    public identifier: PXRD-00042 must name the same paper next year as today.
+
+    That is why the ranking is built in COHORTS rather than over one pool. The
+    corpus grew when curves.admission re-admitted 1,672 curves that figure-level
+    quarantine had taken as collateral (see tools/admit_axis_verified.py),
+    bringing in 238 papers that had no clean curve at all. Ranking all 2,238 by
+    one hash would have renumbered 1,999 of the original 2,000 papers, and 216
+    of the newcomers would have landed on an accession number an existing paper
+    already held - a stale citation would then resolve to a different paper.
+
+    So each cohort is ranked internally by the seeded hash and appended after
+    the ones before it. Numbers already issued never move; a future cohort can
+    only append. Within a cohort the hash keeps the choice arbitrary and
+    reproducible, and prefix stability is preserved, so --limit N always yields
+    the same first N papers with the same numbers as a full run.
+    """
+    cohorts = [
+        # Cohort 1: the original clean corpus. Its numbering predates admission
+        # and is reproduced exactly by keeping this query as it was.
+        "select distinct paper_id from curves where in_clean_set=1",
+        # Cohort 2: papers that reach the site only through a re-admitted curve.
+        """
+        select distinct paper_id from curves where admission='axis_verified'
+          and paper_id not in (select paper_id from curves where in_clean_set=1)
+        """,
+    ]
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for query in cohorts:
+        try:
+            rows = conn.execute(query).fetchall()
+        except sqlite3.OperationalError:
+            # A database predating the admission columns publishes cohort 1
+            # alone rather than failing the run.
+            continue
+        members = sorted(
+            (row[0] for row in rows if row[0] not in seen),
+            key=lambda paper_id: hashlib.sha256(f"{SEED}:{paper_id}".encode()).hexdigest(),
+        )
+        ordered.extend(members)
+        seen.update(members)
+    return ordered[:limit]
+
+
+# Which curves the site publishes. `clean` is the original corpus definition
+# (curves.in_clean_set); `axis_verified` are curves that figure-level quarantine
+# excluded as collateral and whose figure's 2-theta axis was independently
+# cross-validated. See tools/admit_axis_verified.py. Written once and referenced
+# by every selection below so the figure list, the curve list, the descriptors
+# and the exported CSV can never disagree about what is published.
+PUBLISHED_ADMISSION = ("clean", "axis_verified")
+LEGACY_PUBLISHED = "c.in_clean_set=1"
+
+
+def published_predicate(conn: sqlite3.Connection) -> str:
+    """SQL for `curves c` rows the site publishes.
+
+    A database written before tools/admit_axis_verified.py ran has no admission
+    column, and PRAGMA-gating it here keeps such a database importable - the
+    same treatment every other optional column gets. The fallback publishes the
+    original clean set, which is what those databases mean.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(curves)")}
+    if "admission" not in columns:
+        return LEGACY_PUBLISHED
+    marks = ",".join(f"'{name}'" for name in PUBLISHED_ADMISSION)
+    return f"c.admission in ({marks})"
 
 
 def placeholders(items: list[str]) -> str:
@@ -609,6 +670,7 @@ def fetch_metadata(
     rather than assumed to be fine.
     """
     marks = placeholders(paper_ids)
+    published = published_predicate(conn)
 
     # Optional columns are selected only when they exist, so a database
     # predating a backfill still imports. They are also EMITTED only when they
@@ -682,27 +744,64 @@ def fetch_metadata(
                f.caption_text, {status_select}
         from figures f
         join curves c on c.figure_id=f.figure_id
-        where c.in_clean_set=1 and f.paper_id in ({marks})
+        where {published} and f.paper_id in ({marks})
         order by f.paper_id, f.page_number, f.figure_id
         """,
         paper_ids,
     ).fetchall()
 
-    # Curves excluded from the clean set on a published figure. Every one of
-    # these in the pilot is a computed trace (simulated / Pawley refined /
-    # difference), not a failure, so it is disclosed rather than flagged.
-    omitted_computed = {
-        figure_id: count
-        for figure_id, count in conn.execute(
+    # Per-figure counts of curves this run does NOT publish, split by why.
+    #
+    # This used to be one number: count(*) where in_clean_set=0, published as
+    # series_omitted_computed and rendered as "N curves not digitized". Both
+    # halves of that were wrong. The curves were digitized - they exist, with
+    # points, in the same table - and most were not computed traces at all but
+    # ordinary curves that failed a shape check or sat beside one that did.
+    #
+    # curves.admission_reason now records the actual cause, so the two cases can
+    # be counted apart and each label can mean what it says:
+    #
+    #   model_derived   simulated / Pawley-refined / difference traces. A
+    #                   deliberate policy exclusion, and a disclosure.
+    #   quality         the curve failed the offline shape filter, or its
+    #                   figure's axis was never cross-validated. A measurement.
+    #
+    # Splitting them is not cosmetic here: without it, a figure whose sibling
+    # curve was re-admitted would report that curve as missing while displaying
+    # it three rows below.
+    reason_columns = {row[1] for row in conn.execute("PRAGMA table_info(curves)")}
+    if "admission_reason" in reason_columns:
+        by_reason = conn.execute(
             f"""
-            select figure_id, count(*)
+            select figure_id,
+                   sum(admission_reason = 'model_derived'),
+                   sum(admission_reason is not null
+                       and admission_reason != 'model_derived')
             from curves
-            where in_clean_set=0 and paper_id in ({marks})
+            where admission = 'excluded' and paper_id in ({marks})
             group by figure_id
             """,
             paper_ids,
-        )
-    }
+        ).fetchall()
+        omitted_computed = {row[0]: row[1] or 0 for row in by_reason}
+        omitted_quality = {row[0]: row[2] or 0 for row in by_reason}
+    else:
+        # Pre-admission database: the cause was never recorded, so report the
+        # total under the honest heading and claim nothing about computed
+        # traces we cannot identify.
+        omitted_quality = {
+            figure_id: count
+            for figure_id, count in conn.execute(
+                f"""
+                select figure_id, count(*)
+                from curves
+                where in_clean_set=0 and paper_id in ({marks})
+                group by figure_id
+                """,
+                paper_ids,
+            )
+        }
+        omitted_computed = {}
 
     figures: list[dict[str, Any]] = []
     figure_refs: list[FigureRef] = []
@@ -740,6 +839,7 @@ def fetch_metadata(
             "series_detected": verification.series_detected,
             "series_digitized": verification.series_digitized,
             "series_omitted_computed": omitted_computed.get(figure_id, 0),
+            "series_excluded_quality": omitted_quality.get(figure_id, 0),
             "sort_order": order,
         }
         if include_overlays:
@@ -774,6 +874,8 @@ def fetch_metadata(
         "n_peaks",
     ]
     curve_select = [*base_curve_columns, *fidelity, *texts]
+    if "admission" in curve_columns:
+        curve_select.append("admission")
     if wavelength_flag_known:
         curve_select.append("first_peak_wavelength_assumed")
     if publish_peaks:
@@ -782,7 +884,7 @@ def fetch_metadata(
         f"""
         select {", ".join("c." + name for name in curve_select)}
         from curves c
-        where c.in_clean_set=1 and c.paper_id in ({marks})
+        where {published} and c.paper_id in ({marks})
         order by c.figure_id, c.series_id
         """,
         paper_ids,
@@ -828,7 +930,11 @@ def fetch_metadata(
             "point_count": bounded_int(record["n_points"]) or 0,
             "peak_count": bounded_int(record["n_peaks"]),
             "data_path": f"papers/{paper_id}/{figure_id}/curves.csv.gz",
-            "in_clean_set": True,
+            # True only for the original corpus definition. A re-admitted
+            # curve is published but is NOT in the clean set, and conflating
+            # them here would silently restate the paper's 7,713-curve figure.
+            "in_clean_set": record.get("admission", "clean") == "clean",
+            "admission": record.get("admission") or "clean",
             # NULL means "not linked to any other paper by label". It never
             # means "unique material", and the empty state must say so.
             "material_group_id": group_of_series.get(series_id),
@@ -932,12 +1038,13 @@ def read_descriptors(
     ]
     selected = ["series_id", *wanted]
     marks = placeholders(paper_ids)
+    published = published_predicate(conn)
     rows = conn.execute(
         f"""
         select {", ".join("d." + name for name in selected)}
         from descriptors d
         join curves c on c.series_id = d.series_id
-        where c.in_clean_set=1 and c.paper_id in ({marks})
+        where {published} and c.paper_id in ({marks})
         """,
         paper_ids,
     ).fetchall()
@@ -1159,7 +1266,7 @@ def figure_csv_gz(conn: sqlite3.Connection, figure_id: str) -> bytes:
                        c.two_theta_uncertainty_deg
                 from curves c
                 join points p on p.series_id=c.series_id
-                where c.figure_id=? and c.in_clean_set=1
+                where c.figure_id=? and c.admission in ('clean','axis_verified')
                 order by c.series_id, p.two_theta_deg
                 """,
                 (figure_id,),
@@ -1458,7 +1565,7 @@ def main() -> int:
 
     conn = sqlite3.connect(db_path)
     try:
-        paper_ids = deterministic_clean_papers(conn, args.limit)
+        paper_ids = deterministic_publishable_papers(conn, args.limit)
         papers, figures, curves, groups, figure_refs, flag_reasons = fetch_metadata(
             conn,
             paper_ids,

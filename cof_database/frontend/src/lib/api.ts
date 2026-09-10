@@ -14,6 +14,7 @@ import {
 } from "./peakSearch";
 import type { CurveSearchCriteria } from "./peakSearch";
 import type {
+  CurveAdmission,
   CurveRole,
   FigureQualityStatus,
   FigureVerificationStatus,
@@ -56,6 +57,8 @@ type DbCurve = {
   stacking_hump_fwhm_deg?: number | null;
   intensity_ratio_100_001?: number | null;
   descriptor_version?: string | null;
+  // Present only once the curve-admission migration and a re-import have run.
+  admission?: CurveAdmission | null;
 };
 
 type DbFigure = {
@@ -77,6 +80,8 @@ type DbFigure = {
   series_detected?: number | null;
   series_digitized?: number | null;
   series_omitted_computed?: number | null;
+  // Present only once the curve-admission migration and a re-import have run.
+  series_excluded_quality?: number | null;
 };
 
 type DbPaper = {
@@ -105,6 +110,9 @@ type DbPaperSummary = {
   figure_count: number;
   curve_count: number;
   material_count: number;
+  // Present only once the curve-admission migration has run.
+  clean_curve_count?: number | null;
+  clean_figure_count?: number | null;
   publication_status?: PublicationStatus | null;
   publication_status_notice_doi?: string | null;
 };
@@ -134,10 +142,18 @@ const POSTGREST_PAGE_SIZE = 1000;
 
 const PAPER_INDEX_BASE_COLUMNS =
   "id, paper_number, doi, title, authors, journal, publication_year, figure_count, curve_count, material_count";
+const PAPER_CLEAN_COUNT_COLUMNS = "clean_curve_count, clean_figure_count";
 const PAPER_STATUS_COLUMNS = "publication_status, publication_status_notice_doi";
 const FIGURE_VERIFICATION_COLUMNS =
   "verification_status, axis_agreement_deg, axis_rmse_deg, axis_tick_count, series_detected, series_digitized, series_omitted_computed";
 const CURVE_FIDELITY_COLUMNS = "two_theta_uncertainty_deg, trace_confidence";
+/**
+ * Probed apart from FIGURE_VERIFICATION_COLUMNS rather than appended to it.
+ * That group is all-or-nothing, so folding a newer column in would hide every
+ * verification signal during the window between this deploy and the migration.
+ */
+const CURVE_ADMISSION_COLUMN = "admission";
+const FIGURE_EXCLUSION_COLUMN = "series_excluded_quality";
 /**
  * Named as ONE group each, and probed as one group, because PostgREST rejects
  * the whole request over a single unknown column. All-or-nothing here means a
@@ -242,10 +258,17 @@ function demoFacets(paper: PaperDetail) {
 }
 
 async function fetchAllPaperRows(): Promise<DbPaperSummary[]> {
-  const withStatus = await hasColumn("pxrd_paper_index", "publication_status");
-  const columns = withStatus
-    ? `${PAPER_INDEX_BASE_COLUMNS}, ${PAPER_STATUS_COLUMNS}`
-    : PAPER_INDEX_BASE_COLUMNS;
+  const [withStatus, withCleanCount] = await Promise.all([
+    hasColumn("pxrd_paper_index", "publication_status"),
+    hasColumns("pxrd_paper_index", PAPER_CLEAN_COUNT_COLUMNS),
+  ]);
+  const columns = [
+    PAPER_INDEX_BASE_COLUMNS,
+    withStatus ? PAPER_STATUS_COLUMNS : null,
+    withCleanCount ? PAPER_CLEAN_COUNT_COLUMNS : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
   const rows: DbPaperSummary[] = [];
   for (let from = 0; ; from += POSTGREST_PAGE_SIZE) {
     const { data, error } = await supabase!
@@ -327,6 +350,9 @@ function mapCurve(curve: DbCurve): PxrdCurve {
     stackingHumpFwhmDeg: numberOrNull(curve.stacking_hump_fwhm_deg),
     intensityRatio100001: numberOrNull(curve.intensity_ratio_100_001),
     descriptorVersion: curve.descriptor_version ?? null,
+    // Before the migration every published curve WAS clean-set, so the fallback
+    // states a fact about those rows rather than papering over a missing value.
+    admission: curve.admission ?? "clean",
   };
 }
 
@@ -347,6 +373,7 @@ function mapFigure(figure: DbFigure): PxrdFigure {
     seriesDetected: numberOrNull(figure.series_detected),
     seriesDigitized: numberOrNull(figure.series_digitized),
     seriesOmittedComputed: numberOrNull(figure.series_omitted_computed),
+    seriesExcludedQuality: numberOrNull(figure.series_excluded_quality),
     curves: [...(figure.pxrd_curves ?? [])]
       .sort((a, b) => a.sort_order - b.sort_order)
       .map(mapCurve),
@@ -387,6 +414,14 @@ function mapPaper(row: DbPaper): PaperDetail {
     figures,
     figureCount: figures.length,
     curveCount: figures.reduce((total, figure) => total + figure.curves.length, 0),
+    cleanCurveCount: figures.reduce(
+      (total, figure) =>
+        total + figure.curves.filter((curve) => curve.admission === "clean").length,
+      0,
+    ),
+    cleanFigureCount: figures.filter((figure) =>
+      figure.curves.some((curve) => curve.admission === "clean"),
+    ).length,
     materialCount: materialNames.size,
     ...summarizeFacets(facets),
     hasResolvedTitle: hasResolvedTitle(row.title, row.id, row.doi),
@@ -506,6 +541,10 @@ export async function fetchPapers(): Promise<PaperSummary[]> {
     year: row.publication_year,
     figureCount: row.figure_count,
     curveCount: row.curve_count,
+    // Falls back to the full count, which is what it equalled before any curve
+    // was re-admitted: on a pre-migration database the two sets are identical.
+    cleanCurveCount: row.clean_curve_count ?? row.curve_count,
+    cleanFigureCount: row.clean_figure_count ?? row.figure_count,
     materialCount: row.material_count,
     ...summarizeFacets(facetsByPaper.get(row.id) ?? emptyFacets()),
     hasResolvedTitle: hasResolvedTitle(row.title, row.id, row.doi),
@@ -522,14 +561,23 @@ export async function fetchPaper(id: string): Promise<PaperDetail> {
     return paper;
   }
 
-  const [withStatus, withVerification, withFidelity, withFirstPeak, withDescriptors] =
-    await Promise.all([
-      hasColumn("pxrd_papers", "publication_status"),
-      hasColumn("pxrd_figures", "verification_status"),
-      hasColumn("pxrd_curves", "two_theta_uncertainty_deg"),
-      hasColumns("pxrd_curves", CURVE_FIRST_PEAK_COLUMNS),
-      hasColumns("pxrd_curves", CURVE_DESCRIPTOR_COLUMNS),
-    ]);
+  const [
+    withStatus,
+    withVerification,
+    withFidelity,
+    withFirstPeak,
+    withDescriptors,
+    withAdmission,
+    withExclusionSplit,
+  ] = await Promise.all([
+    hasColumn("pxrd_papers", "publication_status"),
+    hasColumn("pxrd_figures", "verification_status"),
+    hasColumn("pxrd_curves", "two_theta_uncertainty_deg"),
+    hasColumns("pxrd_curves", CURVE_FIRST_PEAK_COLUMNS),
+    hasColumns("pxrd_curves", CURVE_DESCRIPTOR_COLUMNS),
+    hasColumn("pxrd_curves", CURVE_ADMISSION_COLUMN),
+    hasColumn("pxrd_figures", FIGURE_EXCLUSION_COLUMN),
+  ]);
 
   const { data, error } = await supabase
     .from("pxrd_papers")
@@ -540,12 +588,14 @@ export async function fetchPaper(id: string): Promise<PaperDetail> {
         id, figure_label, page_number, caption, crop_path, digitized_plot_path,
         overlay_path, quality_status, sort_order,
         ${withVerification ? `${FIGURE_VERIFICATION_COLUMNS},` : ""}
+        ${withExclusionSplit ? `${FIGURE_EXCLUSION_COLUMN},` : ""}
         pxrd_curves (
           id, series_id, label, material_name, curve_role, sample_state,
           two_theta_min, two_theta_max, point_count, peak_count, data_path, sort_order
           ${withFidelity ? `, ${CURVE_FIDELITY_COLUMNS}` : ""}
           ${withFirstPeak ? `, ${CURVE_FIRST_PEAK_COLUMNS}` : ""}
           ${withDescriptors ? `, ${CURVE_DESCRIPTOR_COLUMNS}` : ""}
+          ${withAdmission ? `, ${CURVE_ADMISSION_COLUMN}` : ""}
         )
       )
     `)

@@ -158,7 +158,8 @@ function FigureQualityBadges({ figure }: { figure: PxrdFigure }) {
   const agreement = figure.axisAgreementDeg;
   const detected = figure.seriesDetected;
   const digitized = figure.seriesDigitized;
-  const omitted = figure.seriesOmittedComputed ?? 0;
+  const omittedComputed = figure.seriesOmittedComputed ?? 0;
+  const excludedQuality = figure.seriesExcludedQuality ?? 0;
 
   return (
     <>
@@ -190,23 +191,64 @@ function FigureQualityBadges({ figure }: { figure: PxrdFigure }) {
         </span>
       )}
       {/*
-        The column behind this is `count(*) where in_clean_set = 0` with NO filter
-        on why the curve was dropped. It happens to be all computed traces on
-        today's published figures, but database-wide 1,362 of the 3,732 excluded
-        curves carry digitization quality flags and 65 are labelled
-        "Experimental" — one re-import at a different limit and the old copy would
-        be presenting a failed extraction as a deliberate scope decision. So the
-        badge now claims only what the count knows.
+        These were one badge reading "N curves not digitized", backed by
+        `count(*) where in_clean_set = 0` with no filter on WHY. Both halves were
+        wrong: the curves were digitized — they exist, with points, in the source
+        database — and most were not computed traces but curves that failed a
+        shape check or sat beside one that did.
+
+        curves.admission_reason records the cause, so the two are now counted and
+        named apart. Keeping them merged would have become an outright
+        contradiction once re-admitted curves started appearing on the same
+        figure: a panel would report a curve as absent while rendering it below.
+
+        Both fall back to null on a pre-migration database, and a null badge is
+        simply not drawn.
       */}
-      {omitted > 0 && (
-        <span className="badge" title="Detected in the figure but not published: either a computed trace that is out of scope, or a trace whose digitization did not pass quality checks.">
-          {omitted} curve{omitted === 1 ? "" : "s"} not digitized
+      {omittedComputed > 0 && (
+        <span className="badge" title="Simulated, Pawley-refined or difference traces. This database publishes measured patterns, so these are recorded rather than extracted.">
+          {omittedComputed} computed trace{omittedComputed === 1 ? "" : "s"} not published
+        </span>
+      )}
+      {excludedQuality > 0 && (
+        <span className="badge border-amber-200 bg-amber-50 text-amber-700" title="Extracted, then withheld: the trace did not pass the automated shape checks, or its 2θ axis could not be cross-validated.">
+          {excludedQuality} curve{excludedQuality === 1 ? "" : "s"} withheld by quality checks
         </span>
       )}
       {figure.qualityStatus === "flagged" && (
         <span className="badge border-rose-200 bg-rose-50 text-rose-700">Flagged</span>
       )}
     </>
+  );
+}
+
+/**
+ * Marks a curve the figure-level quarantine rule excluded as collateral.
+ *
+ * That rule drops every trace in a panel when any one of them is flagged. It is
+ * a proxy: the shape filter cannot see a misread 2θ axis, and a panel has only
+ * one axis, so a bad neighbour is treated as evidence against the panel. Here
+ * the axis was fit twice — from tick marks and from OCR of the labels — and the
+ * two agreed, which answers the question the proxy was standing in for.
+ *
+ * Deliberately understated. It is a superscript, not a warning colour, because
+ * the measurement does not support alarm: every re-admitted curve sits in a
+ * cross-validated figure against 82.6% of clean ones. The mark exists so the
+ * distinction is never hidden, not to imply the data is worse.
+ */
+function ReadmittedMark() {
+  return (
+    <span
+      className="ml-1 cursor-help align-super text-[10px] font-semibold text-slate-400"
+      title={
+        "Re-admitted. Another trace in this figure failed the automated shape " +
+        "checks, which by itself would have excluded this one too. This curve " +
+        "passed on its own, and the figure's 2\u03B8 axis was cross-validated by " +
+        "two independent fits."
+      }
+    >
+      re-admitted
+    </span>
   );
 }
 
@@ -836,6 +878,7 @@ function FigureCard({
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-900">
                       {curve.label}
+                      {curve.admission === "axis_verified" && <ReadmittedMark />}
                     </td>
                     <td className="px-4 py-3">
                       <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${roleStyles[curve.role]}`}>
