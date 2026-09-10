@@ -378,7 +378,14 @@ function FigureVerification({ figure }: { figure: PxrdFigure }) {
                   ? String(digitized)
                   : `${digitized} of ${detected}`
             }
-            note="traces accepted from those detected"
+            /*
+              "accepted" meant accepted BY THE DIGITIZER, and read as a verdict
+              on publication. On a figure showing "10 of 10" beside "4 curves
+              withheld by quality checks" that is a flat contradiction to a
+              reader, though both numbers are right: digitization and admission
+              are different stages, and this tile reports only the first.
+            */
+            note="traces the digitizer extracted, before quality checks"
           />
         </div>
       ) : (
@@ -578,12 +585,38 @@ function CurveDescriptors({ figure }: { figure: PxrdFigure }) {
   // renders both, and never as a value.
   if (rows.length === 0) return null;
 
+  /*
+    The summary used to read "{rows.length} of N curves", which was a true
+    coverage figure only while every published curve had a descriptor. It no
+    longer is: `not_computed` is a non-null status, so a re-admitted curve — none
+    of which were ever passed through tools/descriptors.py — satisfies the filter
+    above and was counted as covered. A figure of six such curves announced
+    "6 of 6" above a table whose every row said "no descriptor computed".
+
+    So the headline counts curves that actually carry a NUMBER, and the shortfall
+    is named rather than left for the reader to notice by scrolling.
+  */
+  const measured = rows.filter(
+    (curve) =>
+      curve.crystallineFraction !== null
+      || (curve.stackingHumpStatus !== null && curve.stackingHumpStatus !== "not_computed"),
+  ).length;
+  const uncomputed = figure.curves.length - measured;
+
   return (
     <details className="mt-4 rounded-xl border border-slate-200">
       <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800">
         Crystallinity descriptors
         <span className="ml-2 font-normal text-slate-500">
-          {rows.length} of {figure.curves.length} curve{figure.curves.length === 1 ? "" : "s"}
+          {measured} of {figure.curves.length} curve{figure.curves.length === 1 ? "" : "s"}
+          {uncomputed > 0 && (
+            <span
+              title="These curves were digitized, and their points are in the downloadable data. The descriptors are a separate offline pass that has not been run over them, so this is missing analysis, not a low value."
+              className="cursor-help"
+            >
+              {" "}· {uncomputed} not computed
+            </span>
+          )}
         </span>
       </summary>
       <div className="overflow-x-auto border-t border-slate-200">
