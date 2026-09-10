@@ -69,7 +69,14 @@ create table if not exists public.pxrd_figures (
   axis_tick_count integer,
   series_detected integer,
   series_digitized integer,
+  -- Computed traces (simulated / Pawley-refined / difference) on this figure
+  -- that are excluded by policy. A disclosure, not a defect.
   series_omitted_computed integer not null default 0,
+  -- Curves on this figure excluded by measurement: they failed the offline
+  -- shape filter, or the figure's axis was never cross-validated. Counted
+  -- apart from the line above because "we chose not to publish a simulation"
+  -- and "this trace did not pass" are different facts.
+  series_excluded_quality integer not null default 0,
   sort_order integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -80,6 +87,7 @@ create table if not exists public.pxrd_figures (
     and (series_detected is null or series_detected >= 0)
     and (series_digitized is null or series_digitized >= 0)
     and series_omitted_computed >= 0
+    and series_excluded_quality >= 0
   )
 );
 
@@ -131,6 +139,17 @@ create table if not exists public.pxrd_curves (
   peak_count integer check (peak_count is null or peak_count >= 0),
   data_path text,
   in_clean_set boolean not null default false,
+  -- How this curve earned its place. 'clean' is the original corpus definition
+  -- (in_clean_set). 'axis_verified' is a curve that figure-level quarantine
+  -- excluded only because a SIBLING trace in the same panel was flagged, and
+  -- whose figure's 2-theta axis was independently cross-validated - the direct
+  -- measurement of the panel-misread risk that quarantine was standing in for.
+  -- See tools/admit_axis_verified.py and migrations/20260910_curve_admission.sql.
+  admission text not null default 'clean'
+    constraint pxrd_curves_admission_check
+    check (admission in ('clean', 'axis_verified')),
+  constraint pxrd_curves_admission_clean_set_check
+    check (in_clean_set = (admission = 'clean')),
   -- Per-curve automated fidelity numbers, carried from the extraction
   -- pipeline. two_theta_uncertainty_deg is the number a reuser needs.
   two_theta_uncertainty_deg double precision,
@@ -337,7 +356,20 @@ select
   )::integer as figures_axis_disputed,
   count(distinct f.id) filter (
     where f.quality_status = 'flagged'
-  )::integer as figures_flagged
+  )::integer as figures_flagged,
+  -- What the default browse filter needs. curve_count is every published curve;
+  -- a paper with clean_curve_count = 0 has a working page but is reachable from
+  -- the index only with re-admitted curves included.
+  count(distinct c.id) filter (
+    where c.admission = 'clean'
+  )::integer as clean_curve_count,
+  -- Figures that still have a curve under the clean-set-only reading. A figure
+  -- whose every trace was re-admitted disappears from that view along with its
+  -- curves, so the masthead's three numbers stay one consistent reading of the
+  -- corpus rather than mixing two.
+  count(distinct f.id) filter (
+    where c.admission = 'clean'
+  )::integer as clean_figure_count
 from public.pxrd_papers p
 left join public.pxrd_figures f on f.paper_id = p.id
 left join public.pxrd_curves c on c.figure_id = f.id

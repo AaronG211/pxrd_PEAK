@@ -23,6 +23,27 @@ export type CurveRole =
  * type offers no way to say one did — the UI renders a badge only for
  * 'flagged', and 'pending' is silent.
  */
+/**
+ * How a curve earned its place in the corpus.
+ *
+ * `clean` is the original definition: the curve passed the offline shape filter
+ * AND no other curve in its figure was flagged. That second half is figure-level
+ * and deliberately blunt — the shape filter cannot see a misread 2θ axis, and
+ * every trace in a panel shares one axis, so a flagged neighbour is treated as
+ * evidence against the whole panel.
+ *
+ * `axis_verified` is a curve that rule excluded as collateral: unflagged and
+ * experimental in its own right, in a figure whose 2θ axis was fit twice — from
+ * tick marks and from OCR of the labels — and agreed. That agreement is a direct
+ * measurement of the risk the figure-level rule was estimating.
+ *
+ * Not a quality ranking. 100% of `axis_verified` curves sit in a cross-validated
+ * figure against 82.6% of `clean` ones. What is true of them and not of a clean
+ * curve is that a sibling trace in the same panel failed a shape check, which is
+ * why they are labelled per curve rather than merged in silently.
+ */
+export type CurveAdmission = "clean" | "axis_verified";
+
 export type FigureQualityStatus = "pending" | "flagged";
 
 /**
@@ -147,6 +168,12 @@ export interface PxrdCurve {
   stackingHumpFwhmDeg: number | null;
   intensityRatio100001: number | null;
   descriptorVersion: string | null;
+  /**
+   * Defaults to "clean" when the admission migration has not run: every curve
+   * published before it was clean-set by construction, so that is the truth
+   * about those rows rather than a placeholder.
+   */
+  admission: CurveAdmission;
 }
 
 export interface PxrdFigure {
@@ -169,7 +196,19 @@ export interface PxrdFigure {
   axisTickCount: number | null;
   seriesDetected: number | null;
   seriesDigitized: number | null;
+  /**
+   * Computed traces (simulated / Pawley-refined / difference) on this figure,
+   * excluded by policy. Until the admission migration and a re-import have run
+   * this carries every non-clean curve, not just computed ones — which is why
+   * the UI must not describe it as "not digitized".
+   */
   seriesOmittedComputed: number | null;
+  /**
+   * Curves on this figure excluded by measurement rather than policy: they
+   * failed the offline shape filter, or the figure's axis was never
+   * cross-validated. Null until the admission migration and a re-import.
+   */
+  seriesExcludedQuality: number | null;
   curves: PxrdCurve[];
 }
 
@@ -183,6 +222,15 @@ export interface PaperSummary {
   year: number | null;
   figureCount: number;
   curveCount: number;
+  /**
+   * Curves in the original clean set. Equals curveCount until the admission
+   * migration and a re-import have run. A paper where this is 0 is published
+   * and has a working page, but appears in the index only when re-admitted
+   * curves are included.
+   */
+  cleanCurveCount: number;
+  /** Figures still holding a clean curve. Equals figureCount pre-migration. */
+  cleanFigureCount: number;
   materialCount: number;
   materialNames: string[];
   curveRoles: CurveRole[];
