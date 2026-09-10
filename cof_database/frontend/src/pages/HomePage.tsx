@@ -276,9 +276,11 @@ export function HomePage() {
    * The page lives in the URL, not in component state.
    *
    * As React state it was invisible to everything outside the tab: a crawler
-   * following links saw only page 1, so 1,975 of the 2,000 paper pages had no
+   * following links saw only page 1, so all but the first 25 paper pages had no
    * discoverable path, and a reader could not share or bookmark "page 12 of the
-   * results" or return to it with the back button. The API below is unchanged,
+   * results" or return to it with the back button. (Stated as a fraction rather
+   * than "1,975 of 2,000" because the corpus size moves and the defect did not
+   * depend on it.) The API below is unchanged,
    * so the ~19 resetPage() call sites in the filter controls keep working.
    */
   const page = Math.max(1, Number(searchParams.get("page") ?? "1") || 1);
@@ -296,8 +298,14 @@ export function HomePage() {
 
   usePageMeta({
     title: SITE_TITLE,
+    // The corpus size was written into this sentence as the literal "2,000",
+    // and went stale the day 238 papers were re-admitted. It is read from the
+    // loaded index instead, and omitted entirely until that arrives - a search
+    // result advertising "0 published papers" is worse than one with no number.
     description:
-      "Powder X-ray diffraction patterns recovered from 2,000 published papers. "
+      (papers.length > 0
+        ? `Powder X-ray diffraction patterns recovered from ${papers.length.toLocaleString()} published papers. `
+        : "Powder X-ray diffraction patterns recovered from the published literature. ")
       + "Every curve keeps its source figure, its digitized trace and downloadable "
       + "2-theta / intensity data, so the extraction stays inspectable.",
     // Filter params are dropped from the canonical: labels and peak windows are
