@@ -1,6 +1,12 @@
 import { buildMaterialLabelIndex } from "./lib/materialGroups";
 import { ASSUMED_WAVELENGTH_ANGSTROM, twoThetaToDSpacing } from "./lib/peakSearch";
-import type { FirstPeakStatus, PaperDetail, PxrdCurve, StackingHumpStatus } from "./types";
+import type {
+  CurveAdmission,
+  FirstPeakStatus,
+  PaperDetail,
+  PxrdCurve,
+  StackingHumpStatus,
+} from "./types";
 
 type DemoPaper = Omit<
   PaperDetail,
@@ -35,6 +41,8 @@ interface DemoPeak {
   humpCenter?: number;
   humpFwhm?: number;
   ratio?: number;
+  /** Defaults to "clean"; set to exercise the re-admitted-curve badge. */
+  admission?: CurveAdmission;
 }
 
 function curve(
@@ -56,6 +64,7 @@ function curve(
     materialName,
     role,
     sampleState: role === "experimental" ? "experimental" : "structural model",
+    admission: peak.admission ?? "clean",
     twoThetaMin: min,
     twoThetaMax: max,
     pointCount,
@@ -92,6 +101,8 @@ const DEMO_RECORDS: DemoPaper[] = [
     sourceUrl: "https://doi.org/10.1002/adfm.201705553",
     figureCount: 1,
     curveCount: 5,
+    cleanCurveCount: 4,
+    cleanFigureCount: 1,
     materialCount: 4,
     figures: [
       {
@@ -108,11 +119,15 @@ const DEMO_RECORDS: DemoPaper[] = [
         axisAgreementDeg: 0.041,
         axisRmseDeg: 0.032,
         axisTickCount: 9,
-        seriesDetected: 5,
+        seriesDetected: 6,
         seriesDigitized: 5,
         seriesOmittedComputed: 0,
+        // The sixth trace failed the offline shape filter. Under the old
+        // figure-level rule that would have voided this whole panel; the axis
+        // was cross-validated, so the survivors are re-admitted and labelled.
+        seriesExcludedQuality: 1,
         curves: [
-          curve("10.1002_adfm.201705553-p015-f01-s01", "Experimental", "experimental", "brick-wall COF", 1899, 2.015, 39.975, "/demo/adfm-201705553-curves.csv", { twoTheta: 4.813, fwhm: 0.44, uncertainty: 0.0461, confidence: 0.902, crystallineFraction: 0.731, hump: "hump_detected", humpCenter: 24.6, humpFwhm: 3.34, ratio: 6.12 }),
+          curve("10.1002_adfm.201705553-p015-f01-s01", "Experimental", "experimental", "brick-wall COF", 1899, 2.015, 39.975, "/demo/adfm-201705553-curves.csv", { admission: "axis_verified", twoTheta: 4.813, fwhm: 0.44, uncertainty: 0.0461, confidence: 0.902, crystallineFraction: 0.731, hump: "hump_detected", humpCenter: 24.6, humpFwhm: 3.34, ratio: 6.12 }),
           curve("10.1002_adfm.201705553-p015-f01-s02", "Brick-wall-AB", "simulated", "Brick-wall-AB", 1902, 1.953, 39.973, "/demo/adfm-201705553-curves.csv"),
           curve("10.1002_adfm.201705553-p015-f01-s03", "Brick-wall-AA", "simulated", "Brick-wall-AA", 1905, 1.953, 40.033, "/demo/adfm-201705553-curves.csv"),
           curve("10.1002_adfm.201705553-p015-f01-s04", "Herringbone-AB", "simulated", "Herringbone-AB", 1902, 1.953, 39.973, "/demo/adfm-201705553-curves.csv"),
@@ -132,6 +147,8 @@ const DEMO_RECORDS: DemoPaper[] = [
     sourceUrl: "https://doi.org/10.1002/anie.202113657",
     figureCount: 1,
     curveCount: 4,
+    cleanCurveCount: 4,
+    cleanFigureCount: 1,
     materialCount: 1,
     figures: [
       {
@@ -153,6 +170,7 @@ const DEMO_RECORDS: DemoPaper[] = [
         seriesDetected: 6,
         seriesDigitized: 5,
         seriesOmittedComputed: 1,
+        seriesExcludedQuality: 0,
         curves: [
           curve("10.1002_anie.202113657-p003-f01-s01", "Experimental", "experimental", "KL-FAN", 2482, 0.24, 49.86, "/demo/anie-202113657-curves.csv", { twoTheta: 2.773, status: "low_confidence", fwhm: 0.30, uncertainty: 0.0836, confidence: 0.812, crystallineFraction: 0.607, hump: "hump_detected", humpCenter: 20.4, humpFwhm: 5.44, ratio: 31.9 }),
           curve("10.1002_anie.202113657-p003-f01-s02", "AA Stacking", "simulated", "KL-FAN", 2463, 0.94, 50.18, "/demo/anie-202113657-curves.csv"),
@@ -173,6 +191,8 @@ const DEMO_RECORDS: DemoPaper[] = [
     sourceUrl: "https://doi.org/10.1021/acs.chemmater.3c01952",
     figureCount: 1,
     curveCount: 4,
+    cleanCurveCount: 4,
+    cleanFigureCount: 1,
     materialCount: 2,
     figures: [
       {
@@ -191,6 +211,7 @@ const DEMO_RECORDS: DemoPaper[] = [
         seriesDetected: 4,
         seriesDigitized: 4,
         seriesOmittedComputed: 0,
+        seriesExcludedQuality: 0,
         curves: [
           curve("10.1021_acs.chemmater.3c01952-p003-f01-s01", "Experimental pattern", "experimental", "COF-C2-80", 1427, 1.483, 30.003, "/demo/chemmater-3c01952-curves.csv", { twoTheta: 3.383, fwhm: 0.41, uncertainty: 0.0459, confidence: 0.868, crystallineFraction: 0.797, hump: "no_hump_detected" }),
           curve("10.1021_acs.chemmater.3c01952-p003-f01-s02", "AA Stacking", "simulated", "COF-C2-80", 1427, 1.483, 30.003, "/demo/chemmater-3c01952-curves.csv", { twoTheta: 3.401, fwhm: 0.18, uncertainty: 0.0312, confidence: 0.941, crystallineFraction: 0.852, hump: "window_not_covered" }),

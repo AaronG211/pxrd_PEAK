@@ -240,6 +240,18 @@ export function HomePage() {
   const [peakUnit, setPeakUnit] = useState<PeakUnit>("two-theta");
   const [peakTolerance, setPeakTolerance] = useState<number>(DEFAULT_TOLERANCE_DEG);
   const [includeLowConfidence, setIncludeLowConfidence] = useState(false);
+  /**
+   * Off by default so the index reproduces the corpus the paper reports: 2,000
+   * papers, defined by curves.in_clean_set. Turning it on adds the 238 papers
+   * that reach this database only through a re-admitted curve — one that
+   * figure-level quarantine excluded because a SIBLING trace was flagged, in a
+   * figure whose 2θ axis two independent fits agreed on.
+   *
+   * The default is about matching a published number, not about data quality.
+   * Every re-admitted curve sits in a cross-validated figure; only 82.6% of
+   * clean ones do.
+   */
+  const [includeReadmitted, setIncludeReadmitted] = useState(false);
   const [humpFilter, setHumpFilter] = useState<HumpFilter>("all");
   const [ratioBand, setRatioBand] = useState<RatioBand>("all");
   const [capabilities, setCapabilities] = useState<CurveSearchCapabilities | null>(null);
@@ -479,7 +491,12 @@ export function HomePage() {
           && paper.materialNames.length > 0);
       const labelKeyMatch = !labelKey || paper.sharedLabelKeys.includes(labelKey);
       const curveMatch = curveMatches === null || curveMatches.has(paper.id);
+      // Papers with no clean curve are reachable only when re-admitted curves
+      // are included. Their pages exist and work either way — this filters the
+      // index, it does not unpublish anything.
+      const admissionMatch = includeReadmitted || paper.cleanCurveCount > 0;
       return generalMatch
+        && admissionMatch
         && materialMatch
         && roleMatch
         && scopeMatch
@@ -498,10 +515,28 @@ export function HomePage() {
       if (sortBy === "figures") return b.figureCount - a.figureCount || a.paperNumber.localeCompare(b.paperNumber);
       return a.paperNumber.localeCompare(b.paperNumber);
     });
-  }, [curveMatches, labelKey, labelScope, materialQuery, materialScope, minimumCurves, papers, query, roleFilter, sortBy]);
+  }, [curveMatches, includeReadmitted, labelKey, labelScope, materialQuery, materialScope, minimumCurves, papers, query, roleFilter, sortBy]);
 
-  const figureCount = papers.reduce((sum, paper) => sum + paper.figureCount, 0);
-  const curveCount = papers.reduce((sum, paper) => sum + paper.curveCount, 0);
+  // The masthead states the size of the corpus you are actually browsing, so
+  // all three numbers follow the same reading as the index below them. Mixing
+  // them — 2,238 papers over 7,713 curves — would describe a corpus that does
+  // not exist.
+  const paperCount = includeReadmitted
+    ? papers.length
+    : papers.filter((paper) => paper.cleanCurveCount > 0).length;
+  const figureCount = papers.reduce(
+    (sum, paper) => sum + (includeReadmitted ? paper.figureCount : paper.cleanFigureCount),
+    0,
+  );
+  const curveCount = papers.reduce(
+    (sum, paper) => sum + (includeReadmitted ? paper.curveCount : paper.cleanCurveCount),
+    0,
+  );
+  const readmittedPaperCount = papers.length - papers.filter((p) => p.cleanCurveCount > 0).length;
+  const readmittedCurveCount = papers.reduce(
+    (sum, paper) => sum + (paper.curveCount - paper.cleanCurveCount),
+    0,
+  );
   const visibleRoleOptions = useMemo(() => {
     const roles = new Set(papers.flatMap((paper) => paper.curveRoles));
     const hasExpModel = papers.some((paper) =>
@@ -606,7 +641,7 @@ export function HomePage() {
   return (
     <>
       <CorpusMasthead
-        papers={papers.length}
+        papers={paperCount}
         figures={figureCount}
         curves={curveCount}
         loading={isLoading}
@@ -914,6 +949,35 @@ export function HomePage() {
                       </label>
                     )}
                   </div>
+
+                  {readmittedCurveCount > 0 && (
+                    <label className="mt-3 flex items-start gap-2 text-xs text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={includeReadmitted}
+                        onChange={(event) => {
+                          setIncludeReadmitted(event.target.checked);
+                          resetPage();
+                        }}
+                        className="mt-0.5 h-4 w-4 rounded border-slate-300 accent-blue-700"
+                      />
+                      <span>
+                        Include re-admitted curves (+
+                        {readmittedCurveCount.toLocaleString()} curves,{" "}
+                        {readmittedPaperCount.toLocaleString()} more papers).{" "}
+                        <span className="text-slate-500">
+                          Off by default so the index matches the corpus definition
+                          this project publishes against. A re-admitted curve was
+                          excluded only because another trace in the same figure
+                          failed the automated shape checks — a figure-level rule
+                          that stands in for a misread 2θ axis. These passed on
+                          their own, in figures whose axis two independent fits
+                          agreed on. Every one of them clears that axis check;
+                          82.6% of the default curves do.
+                        </span>
+                      </span>
+                    </label>
+                  )}
 
                   {canSearchPeaks && (
                     <label className="mt-3 flex items-start gap-2 text-xs text-slate-700">

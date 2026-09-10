@@ -52,12 +52,31 @@ def title_is_usable(title: str, paper_id: str) -> bool:
     return True
 
 
+def _publishable(conn: sqlite3.Connection) -> list[tuple]:
+    """Every paper the site publishes at least one curve from.
+
+    Mirrors the importer's set. `curves.admission` re-admits curves that
+    figure-level quarantine took as collateral (tools/admit_axis_verified.py),
+    and 238 papers reach the site only that way; selecting on in_clean_set
+    alone would leave exactly those papers without a title or metadata. The
+    column is optional, so a database predating it falls back to the original
+    set rather than failing the run.
+    """
+    try:
+        return conn.execute(
+            "select distinct paper_id from curves "
+            "where in_clean_set=1 or admission='axis_verified'"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return conn.execute(
+            "select distinct paper_id from curves where in_clean_set=1"
+        ).fetchall()
+
+
 def selected_papers(conn: sqlite3.Connection, limit: int) -> list[str]:
     ids = [
         row[0]
-        for row in conn.execute(
-            "select distinct paper_id from curves where in_clean_set=1"
-        )
+        for row in _publishable(conn)
     ]
     return sorted(
         ids,
