@@ -1055,9 +1055,16 @@ def read_wavelengths(conn: sqlite3.Connection, paper_ids: list[str]) -> dict[str
     """Per-paper mined wavelength, where a paper reported one at all.
 
     tools/mine_contexts.py finds a machine-readable wavelength in exactly ONE
-    paper of the 2,370-paper corpus, and none of its curves are in the clean set.
-    Every published d-spacing is therefore Cu K-alpha assumed. The lookup exists
-    so that stops being true silently the day a paper does report one.
+    paper of the 2,370-paper corpus. That paper had no clean-set curve, so every
+    published d-spacing used to be Cu K-alpha assumed, and this lookup existed so
+    that would stop being true without anyone noticing.
+
+    It has now stopped being true. curves.admission re-admitted six of that
+    paper's curves, and they are the only published rows whose
+    first_peak_wavelength_source reads 'paper_reported'. The other 9,379 are
+    still assumed. Nothing here changed to make that happen - the provenance
+    column carried it - but the difference is real and the UI must keep showing
+    it per row rather than describing the corpus with one blanket sentence.
     """
     if "wavelength_angstrom" not in {
         row[1] for row in conn.execute("PRAGMA table_info(papers)")
@@ -1560,12 +1567,23 @@ def main() -> int:
             "the pipeline assets volume. --metadata-only publishes paper "
             "metadata without it, and --dry-run reports what is missing."
         )
-    if args.limit < 1 or args.limit > 2000:
-        raise ValueError("--limit must be between 1 and 2000")
+    # The ceiling used to be the literal 2000, which was the size of the clean
+    # set the day it was written. It went stale the moment curves.admission
+    # re-admitted 238 more papers, and refused the full corpus with a message
+    # naming a number that was no longer the corpus. The bound a typo'd --limit
+    # needs to be caught against is how many papers the database actually has,
+    # so it is read from the database.
+    if args.limit < 1:
+        raise ValueError("--limit must be at least 1")
 
     conn = sqlite3.connect(db_path)
     try:
         paper_ids = deterministic_publishable_papers(conn, args.limit)
+        if args.limit > len(paper_ids):
+            print(
+                f"note: --limit {args.limit:,} exceeds the {len(paper_ids):,} "
+                "publishable papers in this database; publishing all of them."
+            )
         papers, figures, curves, groups, figure_refs, flag_reasons = fetch_metadata(
             conn,
             paper_ids,
