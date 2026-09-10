@@ -74,10 +74,15 @@ export type FirstPeakStatus =
 /**
  * Provenance of the wavelength behind `firstPeakDAngstrom`.
  *
- * In the published collection this is `assumed_cu_ka` on every curve that has a
- * first peak at all: exactly one paper in the whole 2,370-paper corpus reports a
- * machine-readable wavelength, and none of its curves survive into the pilot. The
- * value is carried per row so no reader has to trust a sentence in the UI.
+ * This used to be `assumed_cu_ka` on every published curve that has a first peak
+ * at all, because the single paper in the 2,370-paper corpus that reports a
+ * machine-readable wavelength had no curve in the clean set. Six of its curves
+ * were re-admitted (see {@link CurveAdmission}), so `paper_reported` is now a
+ * value that actually occurs — on those six rows and nowhere else.
+ *
+ * The value was carried per row from the start precisely so this could change
+ * without any UI sentence needing to be true about the whole collection. Keep
+ * reading it per row; do not describe the corpus with one blanket claim.
  */
 export type WavelengthSource = "assumed_cu_ka" | "paper_reported";
 

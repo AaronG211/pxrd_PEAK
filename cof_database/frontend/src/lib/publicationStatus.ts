@@ -30,11 +30,19 @@ export function publicationStatusLabel(status: PublicationStatus): string {
 /**
  * Whether the status is a publisher notice worth interrupting a reader for.
  *
- * `unchecked` is excluded on purpose. The 20260830 migration writes it to every
- * one of the 1,000 live papers, so badging it would put an identical grey chip
- * on every index row — noise that would train readers to ignore the very column
- * the retraction badge lives in. It is disclosed on the paper detail page,
- * where there is room to say what it means, rather than hidden outright.
+ * `unchecked` is excluded because it is not a publisher notice. It is the
+ * absence of a check on our side, and this predicate decides whether to
+ * interrupt a reader on a publisher's behalf.
+ *
+ * That reason replaces a weaker one. The comment here used to say `unchecked`
+ * sat on every one of the 1,000 live papers, so badging it would be noise. The
+ * Crossref backfill has since resolved all of them — the live collection is
+ * 2,226 active, 10 corrected, 2 retracted, and ZERO unchecked — so the old
+ * rationale now argues for nothing. The behaviour was right for the other
+ * reason all along, and it still holds if unchecked papers ever return.
+ *
+ * It stays disclosed on the paper detail page, where there is room to say what
+ * it means, rather than hidden outright.
  */
 export function isPublisherNotice(status: PublicationStatus): boolean {
   return status !== "active" && status !== "unchecked";
