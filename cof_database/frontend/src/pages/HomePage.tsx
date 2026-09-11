@@ -241,15 +241,22 @@ export function HomePage() {
   const [peakTolerance, setPeakTolerance] = useState<number>(DEFAULT_TOLERANCE_DEG);
   const [includeLowConfidence, setIncludeLowConfidence] = useState(false);
   /**
-   * Off by default so the index reproduces the corpus the paper reports: 2,000
-   * papers, defined by curves.in_clean_set. Turning it on adds the 238 papers
-   * that reach this database only through a re-admitted curve — one that
-   * figure-level quarantine excluded because a SIBLING trace was flagged, in a
-   * figure whose 2θ axis two independent fits agreed on.
+   * Off by default, showing the 2,000 papers whose curves are all in
+   * curves.in_clean_set. Turning it on adds the 238 that reach this database
+   * only through a re-admitted curve — one figure-level quarantine excluded
+   * because a SIBLING trace was flagged, in a figure whose 2θ axis two
+   * independent fits agreed on.
    *
-   * The default is about matching a published number, not about data quality.
-   * Every re-admitted curve sits in a cross-validated figure; only 82.6% of
-   * clean ones do.
+   * An earlier version of this comment justified the default as "reproduces the
+   * corpus the paper reports". That was wrong and is worth recording: the paper
+   * reports 2,370 papers and 11,445 curves — every accepted curve, with the
+   * flagged ones disclosed rather than dropped. No view of this site currently
+   * shows that corpus. The default is simply the most conservative tier this
+   * database defines, which is a defensible thing to open on but is not the
+   * published resource.
+   *
+   * Not a quality ordering either: every re-admitted curve sits in a
+   * cross-validated figure, against 82.6% of the clean ones.
    */
   const [includeReadmitted, setIncludeReadmitted] = useState(false);
   const [humpFilter, setHumpFilter] = useState<HumpFilter>("all");
