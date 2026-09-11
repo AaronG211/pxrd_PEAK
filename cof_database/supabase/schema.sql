@@ -139,7 +139,10 @@ create table if not exists public.pxrd_curves (
   peak_count integer check (peak_count is null or peak_count >= 0),
   data_path text,
   in_clean_set boolean not null default false,
-  -- How this curve earned its place. 'clean' is the original corpus definition
+  -- How this curve earned its place. 'clean' is this database's own
+  -- conservative tier (curves.in_clean_set), NOT the paper's corpus - the paper
+  -- releases all 11,445 accepted curves with flags disclosed. See the WHY block
+  -- in migrations/20260910_curve_admission.sql.
   -- (in_clean_set). 'axis_verified' is a curve that figure-level quarantine
   -- excluded only because a SIBLING trace in the same panel was flagged, and
   -- whose figure's 2-theta axis was independently cross-validated - the direct
