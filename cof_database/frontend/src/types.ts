@@ -37,10 +37,21 @@ export type CurveRole =
  * tick marks and from OCR of the labels — and agreed. That agreement is a direct
  * measurement of the risk the figure-level rule was estimating.
  *
- * Not a quality ranking. 100% of `axis_verified` curves sit in a cross-validated
- * figure against 82.6% of `clean` ones. What is true of them and not of a clean
- * curve is that a sibling trace in the same panel failed a shape check, which is
- * why they are labelled per curve rather than merged in silently.
+ * Not a quality ranking, and the asymmetry runs the other way: 100% of
+ * `axis_verified` curves sit in a cross-validated figure against 82.6% of
+ * `clean` ones. What is true of them and not of a clean curve is that a sibling
+ * trace in the same panel failed a shape check — which is why they are labelled
+ * per curve rather than merged in silently.
+ *
+ * KNOWN INCONSISTENCY, recorded here because this is where someone will look.
+ * The cross-validated-axis requirement was imposed on the re-admitted set only;
+ * `clean` never had to meet it. 1,303 published `clean` curves sit on axes that
+ * were fit by one method, or fit by two that disagreed and went to arbitration.
+ * 517 curves were nevertheless excluded for exactly that axis provenance, their
+ * only other mark being a flagged sibling. So the same evidence admits a curve
+ * or rejects it depending on which side of the re-admission it fell. Widening
+ * the rule, not narrowing `clean`, is the fix — the paper publishes all 11,445
+ * accepted curves and discloses their flags.
  */
 export type CurveAdmission = "clean" | "axis_verified";
 

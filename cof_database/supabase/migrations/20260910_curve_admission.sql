@@ -34,10 +34,26 @@
 -- sibling trace in the same panel failed a shape check - which is why they are
 -- labelled per curve rather than silently merged.
 --
--- in_clean_set is NOT redefined. It stays the exact original corpus (7,713
--- curves), because the paper, the SI and outputs/analysis/*.json are all
--- written against that number, and a column that quietly changes meaning is
--- how published figures stop being reproducible.
+-- in_clean_set is NOT redefined, and it is worth being exact about why, because
+-- an earlier draft of this comment overstated it.
+--
+-- in_clean_set is NOT the corpus the paper is written against. The paper
+-- releases 2,370 papers / 4,664 figures / 11,445 calibrated curves - every
+-- curve the pipeline accepted, with the 1,362 flagged ones disclosed rather
+-- than removed. 7,713 appears in the paper exactly once, in the validation
+-- section, as the endpoint of the quality funnel: "Of the 11,445, 1,362 curves
+-- are flagged and 967 of 4,664 figures quarantined (3,582 curves), leaving
+-- 7,713 clean."
+--
+-- That single sentence is still reason enough to freeze the column, and there
+-- is a second: ten-odd result files under outputs/analysis/ are computed over
+-- the clean set. Redefining in_clean_set would stop that sentence and those
+-- files reproducing from outputs/pxrd.db.
+--
+-- Worth knowing while reading the rest of this file: the site publishes 9,385
+-- curves, which is neither 7,713 nor 11,445. The 2,060-curve difference from
+-- the paper's released resource is a choice this database has not yet made
+-- deliberately.
 
 begin;
 
