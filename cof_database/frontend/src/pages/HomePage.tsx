@@ -241,24 +241,27 @@ export function HomePage() {
   const [peakTolerance, setPeakTolerance] = useState<number>(DEFAULT_TOLERANCE_DEG);
   const [includeLowConfidence, setIncludeLowConfidence] = useState(false);
   /**
-   * Off by default, showing the 2,000 papers whose curves are all in
-   * curves.in_clean_set. Turning it on adds the 238 that reach this database
-   * only through a re-admitted curve — one figure-level quarantine excluded
-   * because a SIBLING trace was flagged, in a figure whose 2θ axis two
-   * independent fits agreed on.
+   * ON by default: the site opens on everything it actually publishes.
    *
-   * An earlier version of this comment justified the default as "reproduces the
-   * corpus the paper reports". That was wrong and is worth recording: the paper
-   * reports 2,370 papers and 11,445 curves — every accepted curve, with the
-   * flagged ones disclosed rather than dropped. No view of this site currently
-   * shows that corpus. The default is simply the most conservative tier this
-   * database defines, which is a defensible thing to open on but is not the
-   * published resource.
+   * It used to open on the 2,000 papers whose curves are all in
+   * curves.in_clean_set, and that default was indefensible in two ways. It was
+   * justified in an earlier comment as "reproduces the corpus the paper
+   * reports", which is false — the paper reports 2,370 papers and 11,445
+   * curves. And it made the masthead disagree with the database: a visitor read
+   * "7,713 CURVES" on a site holding 9,385, with the other 1,672 reachable only
+   * by finding a checkbox inside a collapsed panel.
    *
-   * Not a quality ordering either: every re-admitted curve sits in a
-   * cross-validated figure, against 82.6% of the clean ones.
+   * A data resource's front page should state its own size. So the default is
+   * now the full published set, and this control narrows rather than widens —
+   * unchecking it restricts the index to in_clean_set, which is the tier the
+   * paper's validation section funnels down to and the tier
+   * outputs/analysis/*.json is computed over. That is a real thing to want; it
+   * is just not the right thing to open on.
+   *
+   * Not a quality ordering: every re-admitted curve sits in a cross-validated
+   * figure, against 82.6% of the clean ones.
    */
-  const [includeReadmitted, setIncludeReadmitted] = useState(false);
+  const [includeReadmitted, setIncludeReadmitted] = useState(true);
   const [humpFilter, setHumpFilter] = useState<HumpFilter>("all");
   const [ratioBand, setRatioBand] = useState<RatioBand>("all");
   const [capabilities, setCapabilities] = useState<CurveSearchCapabilities | null>(null);
@@ -977,18 +980,19 @@ export function HomePage() {
                         className="mt-0.5 h-4 w-4 rounded border-slate-300 accent-blue-700"
                       />
                       <span>
-                        Include re-admitted curves (+
-                        {readmittedCurveCount.toLocaleString()} curves,{" "}
-                        {readmittedPaperCount.toLocaleString()} more papers).{" "}
+                        Include re-admitted curves ({readmittedCurveCount.toLocaleString()}{" "}
+                        curves across {readmittedPaperCount.toLocaleString()} papers
+                        reachable no other way).{" "}
                         <span className="text-slate-500">
-                          Off by default so the index matches the corpus definition
-                          this project publishes against. A re-admitted curve was
-                          excluded only because another trace in the same figure
-                          failed the automated shape checks — a figure-level rule
-                          that stands in for a misread 2θ axis. These passed on
-                          their own, in figures whose axis two independent fits
-                          agreed on. Every one of them clears that axis check;
-                          82.6% of the default curves do.
+                          On by default. Unchecking narrows the index to the strict
+                          clean set — the tier this project&rsquo;s offline analyses
+                          are computed over — and drops those papers from it. A
+                          re-admitted curve was held back only because another trace
+                          in the same figure failed the automated shape checks, a
+                          figure-level rule standing in for a misread 2θ axis. These
+                          passed on their own, in figures whose 2θ axis two
+                          independent fits agreed on: all of them clear that axis
+                          check, against 82.6% of the clean ones.
                         </span>
                       </span>
                     </label>
