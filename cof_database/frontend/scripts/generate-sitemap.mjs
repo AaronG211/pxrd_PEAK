@@ -90,6 +90,7 @@ if (url && key) {
 const entries = [
   urlEntry("/", "1.0", "daily"),
   urlEntry("/digitize", "0.3", "monthly"),
+  urlEntry("/docs/api", "0.5", "monthly"),
   // Paper pages are the corpus. They are the reason the sitemap exists.
   ...paperIds.map((id) => urlEntry(`/paper/${encodeURIComponent(id)}`, "0.8", "monthly")),
 ];
