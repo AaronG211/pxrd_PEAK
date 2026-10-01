@@ -2,6 +2,15 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "headers": [
     {
+      "source": "/data/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        }
+      ]
+    },
+    {
       "source": "/assets/(.*)",
       "headers": [
         {
@@ -42,7 +51,7 @@
       "destination": "/api/v1?path=:path*"
     },
     {
-      "source": "/((?!api/).*)",
+      "source": "/((?!api/|data/).*)",
       "destination": "/index.html"
     }
   ]
