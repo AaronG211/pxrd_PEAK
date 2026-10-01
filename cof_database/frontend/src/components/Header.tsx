@@ -42,6 +42,12 @@ export function Header() {
           >
             Digitize
           </Link>
+          <Link
+            to="/docs/api"
+            className="text-sm font-medium text-slate-600 transition-colors hover:text-slate-900"
+          >
+            API
+          </Link>
           <a
             href="/#about"
             className="hidden text-sm font-medium text-slate-600 transition-colors hover:text-slate-900 sm:block"
@@ -53,7 +59,7 @@ export function Header() {
             target="_blank"
             rel="noreferrer"
             aria-label="GitHub"
-            className="text-slate-500 transition-colors hover:text-slate-900"
+            className="hidden text-slate-500 transition-colors hover:text-slate-900 sm:block"
           >
             <Code2 className="h-4 w-4" />
           </a>

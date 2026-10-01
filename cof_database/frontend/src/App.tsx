@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { useAuth } from "./auth/context";
 import { Header } from "./components/Header";
+import { ApiDocsPage } from "./pages/ApiDocsPage";
 import { AuthCallbackPage } from "./pages/AuthCallbackPage";
 import { DigitizationPlannerPage } from "./pages/DigitizationPlannerPage";
 import { HomePage } from "./pages/HomePage";
@@ -42,6 +43,7 @@ function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/paper/:paperId" element={<PaperDetailRoute />} />
           <Route path="/digitize" element={<DigitizationRoute />} />
+          <Route path="/docs/api" element={<ApiDocsPage />} />
           <Route path="/auth/callback" element={<AuthCallbackPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
