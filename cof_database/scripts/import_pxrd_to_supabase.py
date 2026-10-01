@@ -1735,6 +1735,10 @@ def main() -> int:
         f"Metadata upsert complete: {len(papers)} papers, {len(figures)} "
         f"figures, {len(groups)} material label groups, {len(curves)} curves."
     )
+    # The browse page and the sitemap are snapshots taken at deploy time
+    # (frontend/scripts/generate-index-snapshot.mjs, generate-sitemap.mjs).
+    # Paper pages read live, so nothing is wrong until someone browses the list.
+    print("Redeploy the site so the browse index and sitemap pick this up.")
     return 0
 
 

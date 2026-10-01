@@ -462,6 +462,14 @@ export function getMaterialLabelIndex(): Promise<MaterialLabelIndex> {
   const client = supabase;
   const pending = (async (): Promise<MaterialLabelIndex> => {
     if (!client) return buildMaterialLabelIndex(demoLabelEntries());
+    // The paper page calls this on its own, and without a snapshot it costs a
+    // serial sweep of every curve — ten of that page's sixteen requests.
+    const snapshot = await loadIndexSnapshot();
+    if (snapshot) {
+      return buildMaterialLabelIndex(
+        snapshot.rows.curves.map((curve) => ({ materialName: curve.materialName, paperId: curve.paperId })),
+      );
+    }
     const entries: MaterialLabelEntry[] = [];
     for (let from = 0; ; from += POSTGREST_PAGE_SIZE) {
       const { data, error } = await client
@@ -491,6 +499,167 @@ export function getMaterialLabelIndex(): Promise<MaterialLabelIndex> {
   return pending;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Browse index: build-time snapshot, with the live sweeps as the fallback       */
+/* -------------------------------------------------------------------------- */
+
+/** Facet rows already attributed to their paper. Both sources produce these. */
+type FigureFacet = { paperId: string; qualityStatus: FigureQualityStatus };
+type CurveFacet = {
+  paperId: string;
+  materialName: string | null;
+  role: CurveRole;
+  sampleState: string | null;
+};
+type IndexRows = { papers: DbPaperSummary[]; figures: FigureFacet[]; curves: CurveFacet[] };
+
+type SnapshotCurve = CurveFacet & {
+  firstPeakStatus: string | null;
+  humpStatus: string | null;
+  hasRatio: boolean;
+};
+type IndexSnapshot = {
+  generatedAt: string;
+  capabilities: Pick<
+    CurveSearchCapabilities,
+    "firstPeak" | "descriptors" | "axisUncertainty" | "verificationStatus"
+  >;
+  rows: IndexRows & { curves: SnapshotCurve[] };
+};
+
+/**
+ * Written by scripts/generate-index-snapshot.mjs at build time and preloaded by
+ * index.html, so it usually arrives alongside the JS bundle.
+ *
+ * Measured before it existed: the browse page made 34 Supabase requests before
+ * its first row, three of its sweeps strictly serial, each request paying
+ * 90-150 ms of transit. A first visit took 7.6 s; a repeat 1.4-3.3 s.
+ */
+const INDEX_SNAPSHOT_URL = "/data/paper-index.json";
+const SNAPSHOT_FORMAT = 1;
+/**
+ * Derived from the live select, so a column added there makes every older
+ * snapshot fail this check and fall back, instead of feeding the page rows
+ * that lack it. scripts/generate-index-snapshot.mjs writes the same list.
+ */
+const SNAPSHOT_PAPER_COLUMNS = [PAPER_INDEX_BASE_COLUMNS, PAPER_STATUS_COLUMNS, PAPER_CLEAN_COUNT_COLUMNS]
+  .flatMap((group) => group.split(",").map((column) => column.trim()));
+const SNAPSHOT_FIGURE_COLUMNS = ["paper", "quality_status"];
+const SNAPSHOT_CURVE_COLUMNS = [
+  "paper", "material_name", "curve_role", "sample_state",
+  "first_peak_status", "stacking_hump_status", "has_ratio",
+];
+
+let indexSnapshotPromise: Promise<IndexSnapshot | null> | null = null;
+
+function sameColumns(actual: unknown, expected: readonly string[]): boolean {
+  return Array.isArray(actual)
+    && actual.length === expected.length
+    && actual.every((column, i) => column === expected[i]);
+}
+
+/**
+ * Null for anything not exactly the expected shape. A snapshot is an
+ * optimisation; the cost of distrusting a good one is a slower page, while the
+ * cost of trusting a bad one is a wrong page.
+ */
+function decodeIndexSnapshot(raw: unknown): IndexSnapshot | null {
+  if (!raw || typeof raw !== "object") return null;
+  const s = raw as Record<string, unknown>;
+  if (s.format !== SNAPSHOT_FORMAT) return null;
+  if (!sameColumns(s.paper_columns, SNAPSHOT_PAPER_COLUMNS)
+    || !sameColumns(s.figure_columns, SNAPSHOT_FIGURE_COLUMNS)
+    || !sameColumns(s.curve_columns, SNAPSHOT_CURVE_COLUMNS)) return null;
+  if (!Array.isArray(s.papers) || !Array.isArray(s.figures) || !Array.isArray(s.curves)) return null;
+  const caps = s.capabilities as Record<string, unknown> | undefined;
+  if (!caps || typeof caps !== "object") return null;
+
+  const papers = (s.papers as unknown[][]).map((tuple) =>
+    Object.fromEntries(SNAPSHOT_PAPER_COLUMNS.map((column, i) => [column, tuple[i] ?? null])),
+  ) as unknown as DbPaperSummary[];
+  const paperAt = (index: unknown) => (typeof index === "number" ? papers[index]?.id : undefined);
+
+  const figures: FigureFacet[] = [];
+  for (const [paper, quality] of s.figures as unknown[][]) {
+    const paperId = paperAt(paper);
+    if (!paperId) return null;
+    figures.push({ paperId, qualityStatus: quality as FigureQualityStatus });
+  }
+  const curves: SnapshotCurve[] = [];
+  for (const [paper, material, role, state, firstPeak, hump, ratio] of s.curves as unknown[][]) {
+    const paperId = paperAt(paper);
+    if (!paperId) return null;
+    curves.push({
+      paperId,
+      materialName: (material as string | null) ?? null,
+      role: role as CurveRole,
+      sampleState: (state as string | null) ?? null,
+      firstPeakStatus: (firstPeak as string | null) ?? null,
+      humpStatus: (hump as string | null) ?? null,
+      hasRatio: ratio === 1,
+    });
+  }
+  return {
+    generatedAt: typeof s.generated_at === "string" ? s.generated_at : "",
+    capabilities: {
+      firstPeak: caps.first_peak === true,
+      descriptors: caps.descriptors === true,
+      axisUncertainty: caps.axis_uncertainty === true,
+      verificationStatus: caps.verification_status === true,
+    },
+    rows: { papers, figures, curves },
+  };
+}
+
+function loadIndexSnapshot(): Promise<IndexSnapshot | null> {
+  if (!indexSnapshotPromise) {
+    indexSnapshotPromise = (async () => {
+      try {
+        // Same URL and mode as the <link rel="preload"> in index.html, so the
+        // browser hands over the response it already fetched.
+        const response = await fetch(INDEX_SNAPSHOT_URL, { signal: AbortSignal.timeout(8000) });
+        if (!response.ok) return null;
+        return decodeIndexSnapshot(await response.json());
+      } catch {
+        return null;
+      }
+    })();
+  }
+  return indexSnapshotPromise;
+}
+
+/** When the browse index was built, or null when the page is reading live. */
+export async function getIndexSnapshotDate(): Promise<string | null> {
+  if (!supabase) return null;
+  return (await loadIndexSnapshot())?.generatedAt || null;
+}
+
+async function loadIndexRowsLive(): Promise<IndexRows> {
+  const [papers, figureRows, curveRows] = await Promise.all([
+    fetchAllPaperRows(),
+    fetchAllFigureFacets(),
+    fetchAllCurveFacets(),
+  ]);
+  const figureToPaper = new Map(figureRows.map((figure) => [figure.id, figure.paper_id]));
+  const curves: CurveFacet[] = [];
+  for (const curve of curveRows) {
+    const paperId = figureToPaper.get(curve.figure_id);
+    // Unattributable without its figure; the page has always skipped these.
+    if (!paperId) continue;
+    curves.push({
+      paperId,
+      materialName: curve.material_name,
+      role: curve.curve_role,
+      sampleState: curve.sample_state,
+    });
+  }
+  return {
+    papers,
+    figures: figureRows.map((figure) => ({ paperId: figure.paper_id, qualityStatus: figure.quality_status })),
+    curves,
+  };
+}
+
 export async function fetchPapers(): Promise<PaperSummary[]> {
   if (!supabase) {
     const demoIndex = buildMaterialLabelIndex(demoLabelEntries());
@@ -503,29 +672,25 @@ export async function fetchPapers(): Promise<PaperSummary[]> {
     }));
   }
 
-  const [paperRows, figureRows, curveRows] = await Promise.all([
-    fetchAllPaperRows(),
-    fetchAllFigureFacets(),
-    fetchAllCurveFacets(),
-  ]);
-  const figureToPaper = new Map(figureRows.map((figure) => [figure.id, figure.paper_id]));
+  // One derivation, two sources: everything below this line is identical
+  // whether the rows came from the build-time snapshot or the live sweeps.
+  const snapshot = await loadIndexSnapshot();
+  const { papers: paperRows, figures, curves } = snapshot?.rows ?? (await loadIndexRowsLive());
   const facetsByPaper = new Map<string, PaperFacetAccumulator>();
   for (const row of paperRows) facetsByPaper.set(row.id, emptyFacets());
-  for (const figure of figureRows) {
-    facetsByPaper.get(figure.paper_id)?.qualityStatuses.add(figure.quality_status);
+  for (const figure of figures) {
+    facetsByPaper.get(figure.paperId)?.qualityStatuses.add(figure.qualityStatus);
   }
   const labelEntries: MaterialLabelEntry[] = [];
-  for (const curve of curveRows) {
-    const paperId = figureToPaper.get(curve.figure_id);
-    if (!paperId) continue;
-    labelEntries.push({ materialName: curve.material_name, paperId });
-    const facets = facetsByPaper.get(paperId);
+  for (const curve of curves) {
+    labelEntries.push({ materialName: curve.materialName, paperId: curve.paperId });
+    const facets = facetsByPaper.get(curve.paperId);
     if (!facets) continue;
-    const material = cleanFacet(curve.material_name);
-    const state = cleanFacet(curve.sample_state);
+    const material = cleanFacet(curve.materialName);
+    const state = cleanFacet(curve.sampleState);
     if (material) facets.materialNames.add(material);
     if (state) facets.sampleStates.add(state);
-    facets.curveRoles.add(curve.curve_role);
+    facets.curveRoles.add(curve.role);
   }
   // Free: these are the same rows the facet pass already paid for.
   const labelIndex = buildMaterialLabelIndex(labelEntries);
@@ -741,8 +906,57 @@ function demoCurveSearchCapabilities(): CurveSearchCapabilities {
   };
 }
 
+const FIRST_PEAK_STATUS_KEYS: FirstPeakStatus[] = [
+  "ok",
+  "low_confidence",
+  "truncated_at_window_start",
+  "no_bragg_peak",
+];
+const HUMP_STATUS_KEYS: StackingHumpStatus[] = [
+  "hump_detected",
+  "no_hump_detected",
+  "window_not_covered",
+];
+
+/**
+ * The same counts as the live path below, taken over the snapshot's rows
+ * instead of fourteen count queries. Mirrors it rule for rule: only known keys
+ * are counted, zero counts are omitted, and NULL and the sentinel are one
+ * "no descriptor" option.
+ */
+function capabilitiesFromSnapshot({ capabilities, rows }: IndexSnapshot): CurveSearchCapabilities {
+  const { firstPeak, descriptors, axisUncertainty, verificationStatus } = capabilities;
+  if (!firstPeak && !descriptors) {
+    return { ...NO_CURVE_SEARCH_CAPABILITIES, axisUncertainty, verificationStatus };
+  }
+  const statusCounts: Partial<Record<FirstPeakStatus, number>> = {};
+  const humpCounts: Partial<Record<StackingHumpStatus | "no_descriptor", number>> = {};
+  let ratioCount = 0;
+  for (const curve of rows.curves) {
+    if (firstPeak) {
+      const status = curve.firstPeakStatus as FirstPeakStatus | null;
+      if (status && FIRST_PEAK_STATUS_KEYS.includes(status)) {
+        statusCounts[status] = (statusCounts[status] ?? 0) + 1;
+      }
+    }
+    if (descriptors) {
+      const hump = curve.humpStatus;
+      if (hump === null || hump === NO_DESCRIPTOR_SENTINEL) {
+        humpCounts.no_descriptor = (humpCounts.no_descriptor ?? 0) + 1;
+      } else if (HUMP_STATUS_KEYS.includes(hump as StackingHumpStatus)) {
+        const key = hump as StackingHumpStatus;
+        humpCounts[key] = (humpCounts[key] ?? 0) + 1;
+      }
+      if (curve.hasRatio) ratioCount += 1;
+    }
+  }
+  return { firstPeak, descriptors, axisUncertainty, verificationStatus, statusCounts, humpCounts, ratioCount };
+}
+
 export async function fetchCurveSearchCapabilities(): Promise<CurveSearchCapabilities> {
   if (!supabase) return demoCurveSearchCapabilities();
+  const snapshot = await loadIndexSnapshot();
+  if (snapshot) return capabilitiesFromSnapshot(snapshot);
   const [firstPeak, descriptors, axisUncertainty, verificationStatus] = await Promise.all([
     hasColumns("pxrd_curves", CURVE_FIRST_PEAK_COLUMNS),
     hasColumns("pxrd_curves", CURVE_DESCRIPTOR_COLUMNS),
@@ -753,17 +967,8 @@ export async function fetchCurveSearchCapabilities(): Promise<CurveSearchCapabil
     return { ...NO_CURVE_SEARCH_CAPABILITIES, axisUncertainty, verificationStatus };
   }
 
-  const statusKeys: FirstPeakStatus[] = [
-    "ok",
-    "low_confidence",
-    "truncated_at_window_start",
-    "no_bragg_peak",
-  ];
-  const humpKeys: StackingHumpStatus[] = [
-    "hump_detected",
-    "no_hump_detected",
-    "window_not_covered",
-  ];
+  const statusKeys = FIRST_PEAK_STATUS_KEYS;
+  const humpKeys = HUMP_STATUS_KEYS;
 
   const [statusValues, humpValues, ratioCount] = await Promise.all([
     firstPeak
