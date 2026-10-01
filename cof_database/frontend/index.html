@@ -9,6 +9,14 @@
       content="A traceable database of source PXRD figures and downloadable digitized diffraction curves."
     />
     <title>Open PXRD Database</title>
+    <!--
+      The browse index, built at deploy time. Preloaded so it downloads in
+      parallel with the JS bundle instead of after it. `crossorigin` is required
+      for the preload to match fetch()'s request mode and be reused; without it
+      the browser downloads the file twice. If the file is absent the page falls
+      back to querying the database live.
+    -->
+    <link rel="preload" href="/data/paper-index.json" as="fetch" crossorigin />
   </head>
   <body>
     <div id="root"></div>

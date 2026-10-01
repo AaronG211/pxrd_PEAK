@@ -20,6 +20,7 @@ import { PublicationStatusBadge } from "../components/PublicationStatusBadge";
 import {
   fetchCurveSearchCapabilities,
   fetchPapers,
+  getIndexSnapshotDate,
   getMaterialLabelIndex,
   isSupabaseConfigured,
   searchCurves,
@@ -262,6 +263,13 @@ export function HomePage() {
    * figure, against 82.6% of the clean ones.
    */
   const [includeReadmitted, setIncludeReadmitted] = useState(true);
+  /**
+   * When the browse index was built, or null when it was read live. The list is
+   * a deploy-time snapshot (scripts/generate-index-snapshot.mjs); paper pages
+   * are always live. Shown so a list that lags an import is visibly a snapshot
+   * rather than silently out of date.
+   */
+  const [indexDate, setIndexDate] = useState<string | null>(null);
   const [humpFilter, setHumpFilter] = useState<HumpFilter>("all");
   const [ratioBand, setRatioBand] = useState<RatioBand>("all");
   const [capabilities, setCapabilities] = useState<CurveSearchCapabilities | null>(null);
@@ -342,6 +350,10 @@ export function HomePage() {
 
   useEffect(() => {
     let active = true;
+    // Resolves from the same memoised request fetchPapers makes; no extra fetch.
+    getIndexSnapshotDate().then((date) => {
+      if (active) setIndexDate(date);
+    });
     fetchPapers()
       .then((data) => {
         if (!active) return;
@@ -1130,6 +1142,14 @@ export function HomePage() {
                     {filteredPapers.length > 0 && (
                       <span className="font-normal text-slate-500">
                         {" "}· showing {pageStart + 1}–{Math.min(pageStart + pageSize, filteredPapers.length)}
+                      </span>
+                    )}
+                    {indexDate && (
+                      <span
+                        className="font-normal text-slate-400"
+                        title="The paper list is rebuilt each time the site is deployed. Individual paper pages always read the database directly."
+                      >
+                        {" "}· index as of {new Date(indexDate).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
                       </span>
                     )}
                   </>

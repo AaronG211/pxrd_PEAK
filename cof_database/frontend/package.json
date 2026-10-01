@@ -5,11 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/generate-sitemap.mjs && tsc -b && vite build",
+    "build": "node scripts/generate-sitemap.mjs && node scripts/generate-index-snapshot.mjs && tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
     "sitemap": "node scripts/generate-sitemap.mjs",
-    "test:api": "node --experimental-strip-types --no-warnings scripts/smoke-api.mjs"
+    "test:api": "node --experimental-strip-types --no-warnings scripts/smoke-api.mjs",
+    "snapshot": "node scripts/generate-index-snapshot.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
