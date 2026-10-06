@@ -47,6 +47,50 @@ const PUBLICATION_STATUSES = ["active", "corrected", "retracted", "withdrawn", "
 
 const CACHE_OK = "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400";
 
+/** Material label group keys: the normaliser below keeps only these characters. */
+const GROUP_ID_PATTERN = /^[a-z0-9@/]{1,64}$/;
+const SPECIFICITIES = ["specific", "generic", "serial", "paper_local"];
+
+/*
+ * normalizeMaterialLabel, copied VERBATIM from src/lib/materialGroups.ts with its
+ * tables. A copy rather than an import because this file must stay a single
+ * module (see the header). Drift is not left to discipline: the smoke test
+ * imports the original and asserts both produce the same key for every label
+ * variant in the live database.
+ */
+const CHARACTER_FORMS: Record<string, string> = {
+  "₀": "0", "₁": "1", "₂": "2", "₃": "3", "₄": "4",
+  "₅": "5", "₆": "6", "₇": "7", "₈": "8", "₉": "9",
+  "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4",
+  "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9",
+  "ₐ": "a", "ₑ": "e", "ₕ": "h", "ᵢ": "i", "ₙ": "n", "ₒ": "o",
+  "ₚ": "p", "ₛ": "s", "ₜ": "t", "ⁿ": "n", "ᵃ": "a", "ᵇ": "b",
+};
+const GREEK: Record<string, string> = {
+  α: "alpha", β: "beta", γ: "gamma", δ: "delta", ε: "epsilon",
+  ζ: "zeta", η: "eta", θ: "theta", κ: "kappa", λ: "lambda",
+  μ: "mu", ν: "nu", π: "pi", ρ: "rho", σ: "sigma", τ: "tau",
+  φ: "phi", χ: "chi", ψ: "psi", ω: "omega",
+};
+const MARKUP = /<\/?[a-z][^>]{0,40}>/gi;
+const ENTITIES: Record<string, string> = {
+  "&amp;": "&", "&lt;": "<", "&gt;": ">", "&nbsp;": " ", "&quot;": '"',
+};
+
+export function normalizeMaterialLabel(raw: string | null | undefined): string {
+  if (!raw) return "";
+  let textValue = raw;
+  for (const [entity, char] of Object.entries(ENTITIES)) {
+    textValue = textValue.split(entity).join(char);
+  }
+  textValue = textValue.replace(MARKUP, "").toLowerCase();
+  let folded = "";
+  for (const char of textValue) {
+    folded += CHARACTER_FORMS[char] ?? GREEK[char] ?? char;
+  }
+  return folded.replace(/[^a-z0-9@/]/g, "");
+}
+
 // ---------------------------------------------------------------------------
 // Responses
 // ---------------------------------------------------------------------------
@@ -302,12 +346,22 @@ const CURVE_COLUMNS = [
   "first_peak_status", "first_peak_wavelength_angstrom", "first_peak_wavelength_source",
   "crystalline_fraction", "stacking_hump_status", "stacking_hump_center_deg",
   "stacking_hump_fwhm_deg", "intensity_ratio_100_001", "descriptor_version",
+  "material_group_id",
 ].join(",");
+/** The figure each curve sits on, and the DOI of its paper, in one embed. */
+const FIGURE_EMBED = "paper_id,verification_status,pxrd_papers(doi)";
 
-function shapeCurve(row: Record<string, unknown>, figure?: Record<string, unknown>) {
+function embeddedDoi(figure?: Record<string, unknown>): string | null {
+  const paper = figure?.pxrd_papers as Record<string, unknown> | null | undefined;
+  return text(paper?.doi);
+}
+
+function shapeCurve(row: Record<string, unknown>, figure?: Record<string, unknown>, paperDoi?: string | null) {
   const seriesId = String(row.series_id);
   const figureId = String(row.figure_id);
   const paperId = text(figure?.paper_id) ?? figureId.replace(/-p\d+-f\d+$/, "");
+  const doi = paperDoi ?? embeddedDoi(figure);
+  const group = text(row.material_group_id);
   const firstPeak = num(row.first_peak_two_theta_deg) === null
     ? null
     : {
@@ -323,9 +377,16 @@ function shapeCurve(row: Record<string, unknown>, figure?: Record<string, unknow
   return {
     series_id: seriesId,
     paper_id: paperId,
+    // paper_id is the DOI with "/" replaced by "_" so it can sit in a URL path;
+    // this is the DOI itself, to cite and to resolve.
+    doi,
     figure_id: figureId,
     label: text(row.label),
     material_name: text(row.material_name),
+    // Label agreement across papers, never verified material identity. Null
+    // when the label is not shared with another paper, or is too generic to
+    // link ("COF", "COF-1"). See /api/v1/materials.
+    material_group: group,
     sample_state: text(row.sample_state),
     role: text(row.curve_role),
     admission: text(row.admission) ?? "clean",
@@ -354,15 +415,18 @@ function shapeCurve(row: Record<string, unknown>, figure?: Record<string, unknow
       data: `${SITE}/api/v1/curves/${seriesId}/data`,
       figure: `${SITE}/api/v1/figures/${figureId}`,
       page: `${SITE}/paper/${paperId}#${figureId}`,
+      publication: doi ? `https://doi.org/${doi}` : null,
+      material_group: group ? `${SITE}/api/v1/curves?material_group=${encodeURIComponent(group)}` : null,
     },
   };
 }
 
-function shapeFigure(row: Record<string, unknown>) {
+function shapeFigure(row: Record<string, unknown>, paperDoi?: string | null) {
   const id = String(row.id);
   return {
     id,
     paper_id: row.paper_id,
+    doi: paperDoi ?? embeddedDoi(row),
     label: text(row.figure_label),
     page_number: num(row.page_number),
     caption: text(row.caption),
@@ -408,8 +472,10 @@ function index() {
     name: "Open PXRD Database API",
     version: VERSION,
     description:
-      "Read-only access to powder X-ray diffraction patterns digitized from published figures. "
-      + "No key required. Responses are cached for up to an hour.",
+      "Read-only access to powder X-ray diffraction patterns digitized from figures in published "
+      + "papers, mostly from the covalent organic framework (COF) literature. Live counts: "
+      + `${SITE}/api/v1/stats. No key required. Responses are cached for up to an hour.`,
+    bulk_download: "https://github.com/AaronG211/pxrd_PEAK/releases",
     documentation: `${SITE}/docs/api`,
     endpoints: [
       { path: "/api/v1/stats", description: "Corpus counts." },
@@ -420,12 +486,16 @@ function index() {
       { path: "/api/v1/curves/{series_id}/data", description: "One curve's 2-theta / intensity points. ?format=json (default) or csv." },
       { path: "/api/v1/figures/{figure_id}", description: "One figure with its curves." },
       { path: "/api/v1/figures/{figure_id}/data", description: "Every curve in one figure, as gzipped CSV (redirect)." },
+      { path: "/api/v1/materials", description: "Material label groups, searched with the website's normalisation.", example: `${SITE}/api/v1/materials?q=TpPa1` },
     ],
     notes: [
       "Curves are digitized from published images, not raw diffractometer files.",
       "Intensities are relative and per-curve; they are not comparable across curves.",
       "d-spacings are derived from 2-theta at an assumed Cu K-alpha wavelength unless wavelength_source says otherwise.",
       "When training models, split by paper_id: curves in one figure share a material and an axis.",
+      "Traces the figure labels as simulated, refined or difference curves are not published. role records what the "
+        + "source said: 'experimental' where labelled so, 'reference' for reference cards, 'unclassified' for about half of all curves.",
+      "Material groups are label agreement between papers, not verified material identity.",
     ],
   };
 }
@@ -508,10 +578,10 @@ async function getPaper(id: string) {
     publication_status: text(row.publication_status),
     publication_status_notice_doi: text(row.publication_status_notice_doi),
     figures: figures.map((figure) => ({
-      ...shapeFigure(figure),
+      ...shapeFigure(figure, text(row.doi)),
       curves: ((figure.pxrd_curves as Record<string, unknown>[]) ?? [])
         .sort((a, b) => String(a.series_id).localeCompare(String(b.series_id)))
-        .map((curve) => shapeCurve(curve, figure)),
+        .map((curve) => shapeCurve(curve, figure, text(row.doi))),
     })),
     links: paperLinks(id),
   };
@@ -521,6 +591,11 @@ async function listCurves(url: URL, params: Params) {
   const paperId = params.id("paper_id");
   const figureId = params.id("figure_id");
   const material = params.str("material");
+  const materialGroup = params.str("material_group", 64);
+  if (materialGroup !== null && !GROUP_ID_PATTERN.test(materialGroup)) {
+    throw new ApiError(400, "invalid_parameter",
+      "'material_group' must be a group id from /api/v1/materials (lowercase letters, digits, @ and /).");
+  }
   const role = params.oneOf("role", CURVE_ROLES);
   const admission = params.oneOf("admission", ADMISSIONS);
   const peakMin = params.num("first_peak_min", 0, 180);
@@ -540,7 +615,7 @@ async function listCurves(url: URL, params: Params) {
   // !inner makes the figure filters below restrict the curves, not just the
   // embedded object. paper_id lives on the figure, not the curve.
   const query = new URLSearchParams({
-    select: `${CURVE_COLUMNS},pxrd_figures!inner(paper_id,verification_status)`,
+    select: `${CURVE_COLUMNS},pxrd_figures!inner(${FIGURE_EMBED})`,
     limit: String(limit),
     offset: String(offset),
     order: {
@@ -552,6 +627,7 @@ async function listCurves(url: URL, params: Params) {
   if (paperId) query.set("pxrd_figures.paper_id", `eq.${paperId}`);
   if (figureId) query.set("figure_id", `eq.${figureId}`);
   if (material) query.set("material_name", `ilike.*${likeText(material)}*`);
+  if (materialGroup) query.set("material_group_id", `eq.${materialGroup}`);
   if (role) query.set("curve_role", `eq.${role}`);
   if (admission) query.set("admission", `eq.${admission}`);
   if (peakMin !== null) query.append("first_peak_two_theta_deg", `gte.${peakMin}`);
@@ -567,10 +643,80 @@ async function listCurves(url: URL, params: Params) {
   };
 }
 
+function shapeGroup(row: Record<string, unknown>) {
+  const id = String(row.id);
+  return {
+    id,
+    name: text(row.display_name),
+    label_variants: Array.isArray(row.label_variants) ? row.label_variants : [],
+    paper_count: num(row.paper_count),
+    curve_count: num(row.curve_count),
+    specificity: text(row.specificity),
+    match_basis: text(row.match_basis),
+    links: { curves: `${SITE}/api/v1/curves?material_group=${encodeURIComponent(id)}` },
+  };
+}
+
+/**
+ * Material label groups: one entry per label printed in more than one paper,
+ * keyed by the same normalisation the website uses, so "TpPa1", "Tp-Pa-1" and
+ * "TpPa-1" find the same group. A group is LABEL AGREEMENT. Nobody has verified
+ * that two papers' "TpPa-1" are the same material, and only `specific` groups
+ * are linked on the website — "COF" and "COF-1" name a class and a per-paper
+ * serial respectively, so they are returned only when asked for.
+ */
+async function listMaterials(url: URL, params: Params) {
+  const q = params.str("q");
+  const specificity = params.oneOf("specificity", [...SPECIFICITIES, "all"]) ?? "specific";
+  const sort = params.oneOf("sort", ["-papers", "-curves", "name"]) ?? "-papers";
+  const limit = params.int("limit", 1, 1000, 100);
+  const offset = params.int("offset", 0, 1_000_000, 0);
+  params.rejectUnknown();
+
+  const key = q === null ? null : normalizeMaterialLabel(q);
+  if (q !== null && !key) {
+    throw new ApiError(400, "invalid_parameter", "'q' has no letters or digits to match on.");
+  }
+  const query = new URLSearchParams({
+    select: "id,display_name,label_variants,paper_count,curve_count,specificity,match_basis",
+    limit: String(limit),
+    offset: String(offset),
+    order: {
+      "-papers": "paper_count.desc,curve_count.desc,id.asc",
+      "-curves": "curve_count.desc,paper_count.desc,id.asc",
+      name: "display_name.asc,id.asc",
+    }[sort] as string,
+  });
+  if (specificity !== "all") query.set("specificity", `eq.${specificity}`);
+  // The key is [a-z0-9@/] only, so it cannot carry PostgREST syntax.
+  if (key) query.set("group_key", `ilike.*${key}*`);
+
+  const [{ rows, total }, exact] = await Promise.all([
+    select("pxrd_material_groups", query, true),
+    key
+      ? select("pxrd_material_groups", new URLSearchParams({
+          select: "id,display_name,label_variants,paper_count,curve_count,specificity,match_basis",
+          group_key: `eq.${key}`,
+        }))
+      : Promise.resolve({ rows: [], total: null }),
+  ]);
+  const exactRow = exact.rows[0];
+  return {
+    data: rows.map(shapeGroup),
+    meta: {
+      ...page(url, limit, offset, rows.length, total),
+      query_key: key,
+      // The group whose normalised key equals the query, whatever its
+      // specificity, so "COF-1" is still answered: it exists, it is serial.
+      exact_match: exactRow ? shapeGroup(exactRow) : null,
+    },
+  };
+}
+
 async function curveRow(seriesId: string, extra = "") {
   const query = new URLSearchParams({
     series_id: `eq.${seriesId}`,
-    select: `${CURVE_COLUMNS},data_path${extra},pxrd_figures(paper_id,verification_status)`,
+    select: `${CURVE_COLUMNS},data_path${extra},pxrd_figures(${FIGURE_EMBED})`,
   });
   const { rows } = await select("pxrd_curves", query);
   const row = rows[0];
@@ -683,7 +829,7 @@ async function curveData(url: URL, seriesId: string, params: Params) {
 async function getFigure(figureId: string) {
   const query = new URLSearchParams({
     id: `eq.${figureId}`,
-    select: `*,pxrd_curves(${CURVE_COLUMNS})`,
+    select: `*,pxrd_papers(doi),pxrd_curves(${CURVE_COLUMNS})`,
   });
   const { rows } = await select("pxrd_figures", query);
   const row = rows[0];
@@ -692,7 +838,7 @@ async function getFigure(figureId: string) {
     ...shapeFigure(row),
     curves: ((row.pxrd_curves as Record<string, unknown>[]) ?? [])
       .sort((a, b) => String(a.series_id).localeCompare(String(b.series_id)))
-      .map((curve) => shapeCurve(curve, row)),
+      .map((curve) => shapeCurve(curve, row, embeddedDoi(row))),
   };
 }
 
@@ -741,6 +887,9 @@ async function route(request: Request): Promise<Response> {
       if (sub) break;
       params.rejectUnknown();
       return json(await getCurve(pathId(id, "curve")));
+    case "materials":
+      if (id) break;
+      return json(await listMaterials(url, params));
     case "figures":
       if (!id) break;
       params.rejectUnknown();

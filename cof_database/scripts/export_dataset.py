@@ -63,6 +63,19 @@ PAPER_COLUMNS = [
 ]
 
 
+# Columns that only mean something when unpublished curves are present.
+ACCEPTED_ONLY_COLUMNS = {"admission_reason", "published_on_site"}
+
+
+def published_text(value):
+    """Same rule as import_pxrd_to_supabase.published_text: a legend wrapped onto
+    two lines is typography, not data, and breaks line-wise readers of the CSV."""
+    if value is None:
+        return None
+    text = " ".join(str(value).split())
+    return text or None
+
+
 def axis_calibration(root: Path | None, paper_id: str, figure_id: str) -> str | None:
     if root is None:
         return None
@@ -91,7 +104,18 @@ def main() -> int:
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--assets-root", type=Path, default=None)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--scope",
+        choices=["accepted", "published"],
+        default="accepted",
+        help="accepted: every curve the pipeline accepted (11,445), labelled with why "
+        "it is or is not on the site. published: only what the website and API "
+        "serve — the scope of any public release.",
+    )
     args = parser.parse_args()
+    published_only = args.scope == "published"
+    curve_columns = [c for c in CURVE_COLUMNS if not (published_only and c in ACCEPTED_ONLY_COLUMNS)]
+    scope_sql = "where c.admission in ('clean','axis_verified')" if published_only else ""
 
     root = args.assets_root.resolve() if args.assets_root else None
     if root is not None and not root.is_dir():
@@ -117,24 +141,44 @@ def main() -> int:
         join papers p on p.paper_id = c.paper_id
         join figures f on f.figure_id = c.figure_id
         left join descriptors d on d.series_id = c.series_id
+        {scope_sql}
         order by c.paper_id, c.figure_id, c.series_id
-    """).fetchall()
+    """.format(scope_sql=scope_sql)).fetchall()
+    kept = {r["series_id"] for r in rows}
 
     calib_cache: dict[str, str | None] = {}
     tally: Counter[str] = Counter()
 
+    position: Counter[str] = Counter()
+
     def curve_rows():
         for r in rows:
             fid = r["figure_id"]
+            on_site = r["admission"] != "excluded"
+            # Counted over published curves only, as the importer counts them;
+            # counting the unpublished ones too would shift every later number.
+            if on_site:
+                position[fid] += 1
             if fid not in calib_cache:
                 calib_cache[fid] = axis_calibration(root, r["paper_id"], fid)
             tally[r["admission"]] += 1
             record = dict(r)
             record["published_on_site"] = int(r["admission"] != "excluded")
             record["axis_calibration"] = calib_cache[fid]
-            yield [record.get(name) for name in CURVE_COLUMNS]
+            for field in ("label", "material_name", "sample_state"):
+                record[field] = published_text(record.get(field))
+            # The importer names an unlabelled published trace "Series N" by its
+            # position among the figure's published curves (rows here are
+            # ordered by figure, then series_id, as there), and the website and
+            # API show that name. The export says the same so a curve looks
+            # identical wherever it is read. An unpublished trace has no site
+            # name, and inventing one could duplicate a published sibling's, so
+            # it keeps the empty label it actually has.
+            if record["label"] is None and on_site:
+                record["label"] = f"Series {position[fid]}"
+            yield [record.get(name) for name in curve_columns]
 
-    n_curves = write_gz_csv(out / "curves.csv.gz", CURVE_COLUMNS, curve_rows())
+    n_curves = write_gz_csv(out / "curves.csv.gz", curve_columns, curve_rows())
 
     # ---- points ------------------------------------------------------------
     points = conn.execute(
@@ -144,7 +188,7 @@ def main() -> int:
     n_points = write_gz_csv(
         out / "points.csv.gz",
         ["series_id", "two_theta_deg", "relative_intensity"],
-        (tuple(p) for p in points),
+        (tuple(p) for p in points if p[0] in kept),
     )
 
     # ---- papers ------------------------------------------------------------
@@ -152,11 +196,12 @@ def main() -> int:
     cols = [c for c in PAPER_COLUMNS if c in present]
     papers = conn.execute(
         f"select {', '.join(cols)} from papers "
-        "where paper_id in (select distinct paper_id from curves) order by paper_id"
+        "where paper_id in (select distinct paper_id from curves c {scope_sql}) order by paper_id"
+        .format(scope_sql=scope_sql)
     )
     n_papers = write_gz_csv(out / "papers.csv.gz", cols, (tuple(p) for p in papers))
 
-    n_figures = conn.execute("select count(distinct figure_id) from curves").fetchone()[0]
+    n_figures = len({r["figure_id"] for r in rows})
     reasons = dict(conn.execute(
         "select admission_reason, count(*) from curves where admission='excluded' "
         "group by 1 order by 2 desc").fetchall())
@@ -165,8 +210,10 @@ def main() -> int:
 
     stamp = {
         "exported_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "scope": args.scope,
         "papers": n_papers, "figures": n_figures, "curves": n_curves, "points": n_points,
-        "admission": dict(tally), "excluded_reasons": reasons,
+        "admission": dict(tally),
+        **({} if published_only else {"excluded_reasons": reasons}),
         "axis_calibration_by_figure": {str(k): v for k, v in calib.items()},
     }
     (out / "manifest.json").write_text(json.dumps(stamp, indent=2) + "\n")
