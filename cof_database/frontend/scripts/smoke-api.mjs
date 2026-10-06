@@ -25,7 +25,10 @@ for (const file of [resolve(here, "..", "..", ".env"), resolve(here, "..", ".env
 // The deployed function sees only the public key; so must the test.
 delete process.env.SUPABASE_SECRET_KEY;
 
-const api = (await import("../api/v1.ts")).default;
+const apiModule = await import("../api/v1.ts");
+const api = apiModule.default;
+// The website's own normaliser, to hold the API's verbatim copy to it.
+const { normalizeMaterialLabel: siteNormalize } = await import("../src/lib/materialGroups.ts");
 
 let passed = 0;
 const failures = [];
@@ -57,7 +60,14 @@ check("index lists endpoints", Array.isArray(idx.body.endpoints) && idx.body.end
 check("CORS header", idx.headers.get("access-control-allow-origin") === "*");
 check("cache header on 200", (idx.headers.get("cache-control") ?? "").includes("s-maxage"));
 
-const stats = (await call("stats")).body;
+const statsResponse = await call("stats");
+if (statsResponse.status !== 200) {
+  // Every consistency check below is relative to /stats; without it there is
+  // nothing to check against, so stop with the reason rather than a TypeError.
+  console.log(`/stats returned ${statsResponse.status}: ${JSON.stringify(statsResponse.body)}`);
+  process.exit(2);
+}
+const stats = statsResponse.body;
 check("stats has counts", stats.papers > 0 && stats.figures > 0 && stats.curves > 0, JSON.stringify(stats));
 check("admission classes sum to total", stats.by_admission.clean + stats.by_admission.axis_verified === stats.curves);
 
@@ -165,6 +175,86 @@ check("figure contains the curve", fig.body.curves.some((c) => c.series_id === h
 const figData = await call(`figures/${honest.figure_id}/data`);
 check("figure data redirects to storage", figData.status === 302
   && (figData.headers.get("location") ?? "").endsWith("/curves.csv.gz"));
+
+// --- provenance: DOI on every curve ---------------------------------------
+check("curve carries doi", typeof honest.doi === "string" && honest.doi.includes("/"), String(honest.doi));
+const honestPaper = (await call(`papers/${honest.paper_id}`)).body;
+check("curve doi equals its paper's doi", honest.doi === honestPaper.doi, `${honest.doi} vs ${honestPaper.doi}`);
+check("publication link resolves the doi", honest.links.publication === `https://doi.org/${honest.doi}`);
+check("figure carries doi", fig.body.doi === honest.doi && fig.body.curves.every((c) => c.doi === honest.doi));
+check("paper detail curves carry doi", honestPaper.figures.every((f) => f.doi === honestPaper.doi
+  && f.curves.every((c) => c.doi === honestPaper.doi)));
+
+// --- published text has no line breaks --------------------------------------
+// A wrapped legend line ("TB-COF\nmembrane") breaks anyone reading the CSVs a
+// line at a time. Checked over every published curve, not a sample.
+const everyCurve = [];
+for (let url = "curves?limit=1000"; url;) {
+  const [path, query] = url.split("?");
+  const r = (await call(path, query)).body;
+  everyCurve.push(...r.data);
+  url = r.meta.next ? r.meta.next.replace(/^.*\/api\/v1\//, "") : null;
+}
+check("paged through every curve", everyCurve.length === stats.curves, `${everyCurve.length} vs ${stats.curves}`);
+const messy = everyCurve.filter((c) => ["label", "material_name", "sample_state"]
+  .some((k) => c[k] !== null && c[k] !== c[k].split(/\s+/).filter(Boolean).join(" ")));
+check("no line breaks or stray whitespace in published text", messy.length === 0,
+  `${messy.length} e.g. ${messy[0]?.series_id} ${JSON.stringify(messy[0]?.label)}`);
+// An unlabelled trace is "Series N" in the API; its figure's data file must say
+// the same, or a join on the label silently disagrees.
+const unlabelled = everyCurve.find((c) => /^Series \d+$/.test(c.label ?? ""));
+if (unlabelled) {
+  const redirect = await call(`figures/${unlabelled.figure_id}/data`);
+  const file = await fetch(redirect.headers.get("location"));
+  const { gunzipSync } = await import("node:zlib");
+  const lines = gunzipSync(Buffer.from(await file.arrayBuffer())).toString("utf8").split("\n");
+  // "Series N" holds no comma or quote, so the second field is safe to split out.
+  const fileLabels = new Set(lines.filter((l) => l.startsWith(`${unlabelled.series_id},`)).map((l) => l.split(",")[1]));
+  check("unlabelled trace has the same name in its figure file", fileLabels.size === 1 && fileLabels.has(unlabelled.label),
+    `${unlabelled.series_id}: API ${JSON.stringify(unlabelled.label)} vs file ${JSON.stringify([...fileLabels])}`);
+} else {
+  failures.push("no unlabelled curve found to check figure-file labels against");
+}
+check("every curve has a doi", everyCurve.every((c) => typeof c.doi === "string"),
+  `${everyCurve.filter((c) => !c.doi).length} without`);
+
+// --- material label groups ----------------------------------------------------
+const tppa = await call("materials", "q=TpPa1");
+check("materials 200", tppa.status === 200);
+check("hyphen-free query finds the TpPa-1 group", tppa.body.meta.exact_match?.id === "tppa1",
+  JSON.stringify(tppa.body.meta.exact_match?.id));
+check("query key reported", tppa.body.meta.query_key === "tppa1");
+const tppaCurves = await call("curves", "material_group=tppa1&limit=1000");
+check("material_group filter total == group curve_count",
+  tppaCurves.body.meta.total === tppa.body.meta.exact_match?.curve_count,
+  `${tppaCurves.body.meta.total} vs ${tppa.body.meta.exact_match?.curve_count}`);
+check("material_group filter returns that group only",
+  tppaCurves.body.data.length > 0 && tppaCurves.body.data.every((c) => c.material_group === "tppa1"));
+check("material_group papers == group paper_count",
+  new Set(tppaCurves.body.data.map((c) => c.paper_id)).size === tppa.body.meta.exact_match?.paper_count);
+check("group id with @ is accepted", (await call("curves", `material_group=${encodeURIComponent("fe3o4@sio2")}&limit=1`)).status === 200);
+check("malformed group id rejected", (await call("curves", "material_group=TpPa-1")).status === 400);
+check("query with no letters rejected", (await call("materials", `q=${encodeURIComponent("--")}`)).status === 400);
+
+const specific = (await call("materials", "limit=1")).body.meta.total;
+const allGroups = (await call("materials", "specificity=all&limit=1000")).body;
+check("default lists specific groups only", specific > 0 && specific < allGroups.meta.total,
+  `${specific} of ${allGroups.meta.total}`);
+check("generic group reachable as exact match", (await call("materials", "q=COF")).body.meta.exact_match?.specificity === "generic");
+
+// The API carries a verbatim copy of the website's normaliser. Hold it to the
+// original on every label variant in the corpus, and hold both to the stored
+// group ids — the definition the importer actually used.
+const variants = allGroups.data.flatMap((g) => g.label_variants.map((v) => [g.id, v]));
+const disagree = variants.filter(([, v]) => apiModule.normalizeMaterialLabel(v) !== siteNormalize(v));
+check("API normaliser == website normaliser on every variant", disagree.length === 0,
+  `${disagree.length} of ${variants.length}, e.g. ${JSON.stringify(disagree[0])}`);
+const offKey = variants.filter(([id, v]) => apiModule.normalizeMaterialLabel(v) !== id);
+check("every variant normalises to its group id", offKey.length === 0,
+  `${offKey.length} of ${variants.length}, e.g. ${JSON.stringify(offKey[0])}`);
+const synthetic = ["Fe₃O₄@SiO₂", "β-ketoenamine", "TpPa-NH<sub>2</sub>", "A &amp; B", "COF-LZU1", "  Tp-Pa-1  "];
+check("normalisers agree on synthetic edge cases",
+  synthetic.every((v) => apiModule.normalizeMaterialLabel(v) === siteNormalize(v)));
 
 // --- protocol --------------------------------------------------------------
 check("unknown route 404", (await call("nonsense")).status === 404);
