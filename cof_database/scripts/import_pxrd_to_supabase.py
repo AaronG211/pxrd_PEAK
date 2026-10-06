@@ -278,6 +278,21 @@ class Supabase:
         )
         return response.status_code == 200
 
+    def object_etag(self, object_path: str) -> str | None:
+        """The stored object's ETag, unquoted, or None when it does not exist.
+
+        Verified on 2026-10-01 against nine figures: for a single-part upload this
+        is the MD5 of the bytes, so a local rebuild can be compared with what is
+        served without downloading it.
+        """
+        response = self.session().head(
+            f"{self.url}/storage/v1/object/public/{BUCKET}/{quote(object_path, safe='/')}",
+            timeout=(15, 60),
+        )
+        if response.status_code != 200:
+            return None
+        return response.headers.get("etag", "").strip('"') or None
+
     def upload(self, object_path: str, payload: bytes, content_type: str) -> None:
         response = self.session().post(
             f"{self.url}/storage/v1/object/{BUCKET}/{quote(object_path, safe='/')}",
@@ -386,6 +401,26 @@ def published_predicate(conn: sqlite3.Connection) -> str:
         return LEGACY_PUBLISHED
     marks = ",".join(f"'{name}'" for name in PUBLISHED_ADMISSION)
     return f"c.admission in ({marks})"
+
+
+def published_text(value: Any) -> str | None:
+    """A legend string as published: whitespace runs, line breaks included, become
+    one space.
+
+    Labels are transcribed from figure legends, and a legend wrapped onto two
+    lines arrives as "TB-COF\nmembrane". JSON carries that faithfully and RFC 4180
+    CSV quotes it correctly — but anyone who reads the per-figure CSV a line at a
+    time (awk, grep, wc -l, a split on newlines) sees each wrapped row as two, the
+    second starting with a fragment like 'membrane"'. Measured on the full crawl
+    of 2026-10-01: 23 published curves carried line breaks, and line-wise parsing
+    of the downloaded files produced 20 phantom series and 42,217 phantom points.
+    The wrap is typography, not data, so it is removed where the text is
+    published. outputs/pxrd.db keeps the transcription as extracted.
+    """
+    if value is None:
+        return None
+    text = " ".join(str(value).split())
+    return text or None
 
 
 def placeholders(items: list[str]) -> str:
@@ -921,10 +956,10 @@ def fetch_metadata(
             "id": series_id,
             "figure_id": figure_id,
             "series_id": series_id,
-            "label": record["label"] or f"Series {order + 1}",
-            "material_name": record["material_name"] or None,
+            "label": published_text(record["label"]) or f"Series {order + 1}",
+            "material_name": published_text(record["material_name"]),
             "curve_role": role,
-            "sample_state": record["sample_state"] or None,
+            "sample_state": published_text(record["sample_state"]),
             "two_theta_min": bounded_float(record["two_theta_min"]),
             "two_theta_max": bounded_float(record["two_theta_max"]),
             "point_count": bounded_int(record["n_points"]) or 0,
@@ -1278,8 +1313,27 @@ def figure_csv_gz(conn: sqlite3.Connection, figure_id: str) -> bytes:
                 """,
                 (figure_id,),
             )
-            writer.writerows(rows)
+            # An unlabelled trace is "Series N" in pxrd_curves, where N is its
+            # position among the figure's published curves in series_id order
+            # (fetch_metadata). Rows here arrive in that same order, so first
+            # appearance gives the same N. Writing the bare empty label instead
+            # left the 171 unlabelled traces named one thing in the API and the
+            # release and nothing at all in their own figure's file.
+            positions: dict[str, int] = {}
+
+            def series_label(sid: str, label: Any) -> str:
+                position = positions.setdefault(sid, len(positions) + 1)
+                return published_text(label) or f"Series {position}"
+
+            writer.writerows(
+                (sid, series_label(sid, label), published_text(material), published_text(state), *rest)
+                for sid, label, material, state, *rest in rows
+            )
     return output.getvalue()
+
+
+_refreshed_lock = threading.Lock()
+_refreshed_csvs: list[str] = []
 
 
 def upload_figure(
@@ -1333,16 +1387,75 @@ def upload_figure(
         supabase.upload(object_path, payload, content_type)
         uploaded_bytes += len(payload)
 
-    csv_path = f"{remote_base}/curves.csv.gz"
-    if force_assets or not supabase.object_exists(csv_path):
-        conn = sqlite3.connect(db_path)
-        try:
-            payload = figure_csv_gz(conn, figure.figure_id)
-        finally:
-            conn.close()
-        supabase.upload(csv_path, payload, "application/gzip")
-        uploaded_bytes += len(payload)
-    return uploaded_bytes
+    # The data file is derived from the database, so "it exists" is not "it is
+    # current". It used to be skipped whenever present, which meant a change to
+    # which curves are published, or to how a label is written, never reached a
+    # file already uploaded. figure_csv_gz is deterministic (gzip mtime=0), so a
+    # rebuilt file whose MD5 equals the stored ETag is byte-identical and is
+    # left alone; anything else is replaced. Images are not rebuilt this way:
+    # re-encoding is expensive and their source pixels do not change.
+    return uploaded_bytes + refresh_figure_csv(supabase, db_path, figure, force_assets)
+
+
+def refresh_figure_csv(supabase: Supabase, db_path: Path, figure: FigureRef, force: bool) -> int:
+    """Upload a figure's curves.csv.gz unless the stored copy is byte-identical."""
+    csv_path = f"papers/{figure.paper_id}/{figure.figure_id}/curves.csv.gz"
+    conn = sqlite3.connect(db_path)
+    try:
+        payload = figure_csv_gz(conn, figure.figure_id)
+    finally:
+        conn.close()
+    if not force and supabase.object_etag(csv_path) == hashlib.md5(payload).hexdigest():
+        return 0
+    supabase.upload(csv_path, payload, "application/gzip")
+    with _refreshed_lock:
+        _refreshed_csvs.append(figure.figure_id)
+    return len(payload)
+
+
+def refresh_data_files_only(args: argparse.Namespace, db_path: Path) -> int:
+    """--data-files-only: bring every published curves.csv.gz in line with the
+    database, and touch nothing else.
+
+    Exists because the full importer must not run without the assets volume: it
+    would publish every figure as axis_unverified. A change that alters only
+    what the data files contain — how a label is written — has no business
+    needing that volume, and this mode never reads it, never re-encodes an
+    image and never writes a table.
+    """
+    url = os.environ.get("SUPABASE_URL", "").strip()
+    secret_key = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
+    if not url or not secret_key:
+        raise RuntimeError("SUPABASE_URL and SUPABASE_SECRET_KEY are required")
+    conn = sqlite3.connect(db_path)
+    try:
+        paper_ids = set(deterministic_publishable_papers(conn, args.limit))
+        published = published_predicate(conn)
+        refs = [
+            FigureRef(paper_id, figure_id)
+            for paper_id, figure_id in conn.execute(
+                f"select distinct c.paper_id, c.figure_id from curves c where {published} order by 2"
+            )
+            if paper_id in paper_ids
+        ]
+    finally:
+        conn.close()
+    supabase = Supabase(url, secret_key)
+    supabase.verify()
+    uploaded = 0
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        futures = [executor.submit(refresh_figure_csv, supabase, db_path, ref, args.force_assets) for ref in refs]
+        for done, future in enumerate(as_completed(futures), start=1):
+            uploaded += future.result()
+            if done % 500 == 0 or done == len(futures):
+                print(f"Data files: {done}/{len(futures)} checked; {len(_refreshed_csvs)} rewritten.")
+    print(
+        f"Data files rewritten because their content no longer matched the database: "
+        f"{len(_refreshed_csvs)} of {len(refs)} ({uploaded / 1048576:.1f} MiB)."
+        + (f" e.g. {', '.join(sorted(_refreshed_csvs)[:3])}" if _refreshed_csvs else "")
+    )
+    print("No table was written and no image was touched.")
+    return 0
 
 
 def tally(rows: list[dict[str, Any]], key: str) -> dict[str, int]:
@@ -1505,6 +1618,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force-assets", action="store_true")
     parser.add_argument(
+        "--data-files-only",
+        action="store_true",
+        help="Rewrite each published curves.csv.gz whose content differs from the "
+        "database, and nothing else: no table writes, no images, no assets volume.",
+    )
+    parser.add_argument(
         "--metadata-only",
         action="store_true",
         help="Upsert paper metadata only; do not inspect or upload assets",
@@ -1554,6 +1673,8 @@ def main() -> int:
     assets_root = args.assets_root.resolve()
     if not db_path.is_file():
         raise FileNotFoundError(db_path)
+    if args.data_files_only:
+        return refresh_data_files_only(args, db_path)
     # The assets tree is required only by the modes that read it. --metadata-only
     # passes assets_root=None and provably issues zero Storage requests, so
     # demanding the volume for it blocked the paper-metadata sync on any machine
@@ -1724,6 +1845,15 @@ def main() -> int:
         raise
     else:
         executor.shutdown(wait=True)
+    if _refreshed_csvs:
+        # Each of these differed from the database; on a run that changed
+        # nothing about published curves this list should be empty.
+        print(
+            f"Data files rewritten because their content no longer matched the "
+            f"database: {len(_refreshed_csvs)} (e.g. {', '.join(sorted(_refreshed_csvs)[:3])})."
+        )
+    else:
+        print("Data files: every curves.csv.gz already matched the database.")
 
     supabase.upsert("pxrd_papers", papers, 200)
     supabase.upsert("pxrd_figures", figures, 100)

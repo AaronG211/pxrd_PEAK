@@ -628,6 +628,22 @@ function loadIndexSnapshot(): Promise<IndexSnapshot | null> {
   return indexSnapshotPromise;
 }
 
+/**
+ * Corpus size from the browse snapshot. index.html preloads that file on every
+ * route, so a page that only needs the counts gets them without a request of
+ * its own. Null when there is no snapshot; callers then say less, not wrong.
+ */
+export async function getCorpusCounts(): Promise<{ papers: number; figures: number; curves: number } | null> {
+  if (!supabase) return null;
+  const snapshot = await loadIndexSnapshot();
+  if (!snapshot) return null;
+  return {
+    papers: snapshot.rows.papers.length,
+    figures: snapshot.rows.figures.length,
+    curves: snapshot.rows.curves.length,
+  };
+}
+
 /** When the browse index was built, or null when the page is reading live. */
 export async function getIndexSnapshotDate(): Promise<string | null> {
   if (!supabase) return null;
