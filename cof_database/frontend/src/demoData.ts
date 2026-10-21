@@ -18,6 +18,7 @@ type DemoPaper = Omit<
   | "publicationStatus"
   | "publicationStatusNoticeDoi"
   | "sharedLabelKeys"
+  | "admissionCounts"
 >;
 
 /**
@@ -41,7 +42,7 @@ interface DemoPeak {
   humpCenter?: number;
   humpFwhm?: number;
   ratio?: number;
-  /** Defaults to "clean"; set to exercise the re-admitted-curve badge. */
+  /** Defaults to "clean"; set to exercise the per-class marks on the paper page. */
   admission?: CurveAdmission;
 }
 
@@ -125,6 +126,9 @@ const DEMO_RECORDS: DemoPaper[] = [
         // The sixth trace failed the offline shape filter. Under the old
         // figure-level rule that would have voided this whole panel; the axis
         // was cross-validated, so the survivors are re-admitted and labelled.
+        // Since 2026-10-21 that trace would itself be published as
+        // shape_flagged and this count would be 0; it is kept at 1 so the demo
+        // still exercises the "withheld" badge a record imported earlier shows.
         seriesExcludedQuality: 1,
         curves: [
           curve("10.1002_adfm.201705553-p015-f01-s01", "Experimental", "experimental", "brick-wall COF", 1899, 2.015, 39.975, "/demo/adfm-201705553-curves.csv", { admission: "axis_verified", twoTheta: 4.813, fwhm: 0.44, uncertainty: 0.0461, confidence: 0.902, crystallineFraction: 0.731, hump: "hump_detected", humpCenter: 24.6, humpFwhm: 3.34, ratio: 6.12 }),
@@ -147,7 +151,7 @@ const DEMO_RECORDS: DemoPaper[] = [
     sourceUrl: "https://doi.org/10.1002/anie.202113657",
     figureCount: 1,
     curveCount: 4,
-    cleanCurveCount: 4,
+    cleanCurveCount: 3,
     cleanFigureCount: 1,
     materialCount: 1,
     figures: [
@@ -175,7 +179,8 @@ const DEMO_RECORDS: DemoPaper[] = [
           curve("10.1002_anie.202113657-p003-f01-s01", "Experimental", "experimental", "KL-FAN", 2482, 0.24, 49.86, "/demo/anie-202113657-curves.csv", { twoTheta: 2.773, status: "low_confidence", fwhm: 0.30, uncertainty: 0.0836, confidence: 0.812, crystallineFraction: 0.607, hump: "hump_detected", humpCenter: 20.4, humpFwhm: 5.44, ratio: 31.9 }),
           curve("10.1002_anie.202113657-p003-f01-s02", "AA Stacking", "simulated", "KL-FAN", 2463, 0.94, 50.18, "/demo/anie-202113657-curves.csv"),
           curve("10.1002_anie.202113657-p003-f01-s03", "AB Stacking", "simulated", "KL-FAN", 2447, 0.94, 49.86, "/demo/anie-202113657-curves.csv"),
-          curve("10.1002_anie.202113657-p003-f01-s04", "ABC Stacking", "simulated", "KL-FAN", 2452, 0.847, 49.867, "/demo/anie-202113657-curves.csv"),
+          // A computed trace the keyword filter missed and the label audit caught.
+          curve("10.1002_anie.202113657-p003-f01-s04", "ABC Stacking", "simulated", "KL-FAN", 2452, 0.847, 49.867, "/demo/anie-202113657-curves.csv", { admission: "model_derived" }),
         ],
       },
     ],
@@ -191,8 +196,10 @@ const DEMO_RECORDS: DemoPaper[] = [
     sourceUrl: "https://doi.org/10.1021/acs.chemmater.3c01952",
     figureCount: 1,
     curveCount: 4,
-    cleanCurveCount: 4,
-    cleanFigureCount: 1,
+    // No clean curve: this paper drops out when the index is restricted to the
+    // clean set, which is the path the demo has to exercise.
+    cleanCurveCount: 0,
+    cleanFigureCount: 0,
     materialCount: 2,
     figures: [
       {
@@ -212,11 +219,14 @@ const DEMO_RECORDS: DemoPaper[] = [
         seriesDigitized: 4,
         seriesOmittedComputed: 0,
         seriesExcludedQuality: 0,
+        // The reference trace failed a shape check on a single-method axis, so
+        // its unflagged sibling is axis-unconfirmed rather than re-admitted, and
+        // the two stacking models are model-derived. Nothing here is clean.
         curves: [
-          curve("10.1021_acs.chemmater.3c01952-p003-f01-s01", "Experimental pattern", "experimental", "COF-C2-80", 1427, 1.483, 30.003, "/demo/chemmater-3c01952-curves.csv", { twoTheta: 3.383, fwhm: 0.41, uncertainty: 0.0459, confidence: 0.868, crystallineFraction: 0.797, hump: "no_hump_detected" }),
-          curve("10.1021_acs.chemmater.3c01952-p003-f01-s02", "AA Stacking", "simulated", "COF-C2-80", 1427, 1.483, 30.003, "/demo/chemmater-3c01952-curves.csv", { twoTheta: 3.401, fwhm: 0.18, uncertainty: 0.0312, confidence: 0.941, crystallineFraction: 0.852, hump: "window_not_covered" }),
-          curve("10.1021_acs.chemmater.3c01952-p003-f01-s03", "AB Stacking", "simulated", "COF-C2-80", 1427, 1.483, 30.003, "/demo/chemmater-3c01952-curves.csv", { status: "no_bragg_peak", uncertainty: 0.0374, confidence: 0.915 }),
-          curve("10.1021_acs.chemmater.3c01952-p003-f01-s04", "KL-FAN reference", "reference", "KL-FAN", 1427, 1.483, 30.003, "/demo/chemmater-3c01952-curves.csv", { twoTheta: 3.39, fwhm: 0.46, uncertainty: 0.0503, confidence: 0.844, crystallineFraction: 0.688, hump: "hump_detected", humpCenter: 22.1, humpFwhm: 4.2, ratio: 12.4 }),
+          curve("10.1021_acs.chemmater.3c01952-p003-f01-s01", "Experimental pattern", "experimental", "COF-C2-80", 1427, 1.483, 30.003, "/demo/chemmater-3c01952-curves.csv", { admission: "axis_unconfirmed", twoTheta: 3.383, fwhm: 0.41, uncertainty: 0.0459, confidence: 0.868, crystallineFraction: 0.797, hump: "no_hump_detected" }),
+          curve("10.1021_acs.chemmater.3c01952-p003-f01-s02", "AA Stacking", "simulated", "COF-C2-80", 1427, 1.483, 30.003, "/demo/chemmater-3c01952-curves.csv", { admission: "model_derived", twoTheta: 3.401, fwhm: 0.18, uncertainty: 0.0312, confidence: 0.941, crystallineFraction: 0.852, hump: "window_not_covered" }),
+          curve("10.1021_acs.chemmater.3c01952-p003-f01-s03", "AB Stacking", "simulated", "COF-C2-80", 1427, 1.483, 30.003, "/demo/chemmater-3c01952-curves.csv", { admission: "model_derived", status: "no_bragg_peak", uncertainty: 0.0374, confidence: 0.915 }),
+          curve("10.1021_acs.chemmater.3c01952-p003-f01-s04", "KL-FAN reference", "reference", "KL-FAN", 1427, 1.483, 30.003, "/demo/chemmater-3c01952-curves.csv", { admission: "shape_flagged", twoTheta: 3.39, fwhm: 0.46, uncertainty: 0.0503, confidence: 0.844, crystallineFraction: 0.688, hump: "hump_detected", humpCenter: 22.1, humpFwhm: 4.2, ratio: 12.4 }),
         ],
       },
     ],
@@ -233,8 +243,13 @@ const DEMO_LABEL_INDEX = buildMaterialLabelIndex(
 
 export const DEMO_PAPERS: PaperDetail[] = DEMO_RECORDS.map((paper) => {
   const curves = paper.figures.flatMap((figure) => figure.curves);
+  const admissionCounts: PaperDetail["admissionCounts"] = {};
+  for (const item of curves) {
+    admissionCounts[item.admission] = (admissionCounts[item.admission] ?? 0) + 1;
+  }
   return {
     ...paper,
+    admissionCounts,
     materialNames: [...new Set(curves.flatMap((curve) => curve.materialName ? [curve.materialName] : []))],
     curveRoles: [...new Set(curves.map((curve) => curve.role))],
     sampleStates: [...new Set(curves.flatMap((curve) => curve.sampleState ? [curve.sampleState] : []))],

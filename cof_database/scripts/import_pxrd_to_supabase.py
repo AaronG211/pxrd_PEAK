@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stream the deterministic PXRD clean-set pilot into Supabase.
+"""Stream the deterministic PXRD corpus into Supabase.
 
 The importer is idempotent: metadata is upserted and existing Storage objects
 are skipped unless --force-assets is supplied. Images and CSVs are converted in
@@ -31,6 +31,13 @@ rather than living in a frontend caption. Descriptor availability is a
 four-state enum, because "no hump", "the hump region was never plotted" and "no
 descriptor was computed" are three different facts. Cross-paper material groups
 are LABEL agreement and are named that way throughout; see material_labels.py.
+
+Admission rule: every curve the paper releases is published - 11,445 since
+2026-10-21, up from 9,385 - and each carries its class in `admission`: clean,
+axis_verified, shape_flagged, axis_unconfirmed or model_derived. The mapping
+from the local curves.admission / admission_reason columns lives in
+site_admission.py and nowhere else. `in_clean_set` is still the frozen
+7,713-curve clean set and equals `admission = 'clean'`.
 
 Column rule: every optional column is emitted only when the local SQLite
 column exists. The upsert uses resolution=merge-duplicates, which builds its
@@ -68,6 +75,13 @@ from PIL import Image
 # Sibling module in this directory; Python puts the script's own directory on
 # sys.path, so this works however the script is invoked.
 from material_labels import build_groups
+from site_admission import (
+    SITE_ADMISSIONS,
+    has_admission,
+    published_predicate,
+    require_all_mapped,
+    site_admission,
+)
 
 
 BUCKET = "pxrd-assets"
@@ -349,16 +363,30 @@ def deterministic_publishable_papers(conn: sqlite3.Connection, limit: int) -> li
     only append. Within a cohort the hash keeps the choice arbitrary and
     reproducible, and prefix stability is preserved, so --limit N always yields
     the same first N papers with the same numbers as a full run.
+
+    The third cohort is that rule applied again. On 2026-10-21 the site began
+    publishing every curve the paper releases (see site_admission.py), which
+    brought in 132 papers whose every curve is shape_flagged, axis_unconfirmed
+    or model_derived. They are numbered PXRD-02239 onward; PXRD-00001 to
+    PXRD-02238 name the same papers as before.
     """
     cohorts = [
         # Cohort 1: the original clean corpus. Its numbering predates admission
         # and is reproduced exactly by keeping this query as it was.
         "select distinct paper_id from curves where in_clean_set=1",
         # Cohort 2: papers that reach the site only through a re-admitted curve.
+        # The literal 'axis_verified' is the cohort's definition as of
+        # 2026-09-10, kept verbatim so its numbering cannot move.
         """
         select distinct paper_id from curves where admission='axis_verified'
           and paper_id not in (select paper_id from curves where in_clean_set=1)
         """,
+        # Cohort 3: every other paper with a published curve. The two cohorts
+        # above are already in `seen`, so this adds only the papers reachable
+        # through the classes published from 2026-10-21. On a database without
+        # the admission columns the predicate is in_clean_set=1 and this adds
+        # nothing.
+        f"select distinct paper_id from curves c where {published_predicate(conn)}",
     ]
     ordered: list[str] = []
     seen: set[str] = set()
@@ -378,29 +406,13 @@ def deterministic_publishable_papers(conn: sqlite3.Connection, limit: int) -> li
     return ordered[:limit]
 
 
-# Which curves the site publishes. `clean` is the original corpus definition
-# (curves.in_clean_set); `axis_verified` are curves that figure-level quarantine
-# excluded as collateral and whose figure's 2-theta axis was independently
-# cross-validated. See tools/admit_axis_verified.py. Written once and referenced
-# by every selection below so the figure list, the curve list, the descriptors
-# and the exported CSV can never disagree about what is published.
-PUBLISHED_ADMISSION = ("clean", "axis_verified")
-LEGACY_PUBLISHED = "c.in_clean_set=1"
-
-
-def published_predicate(conn: sqlite3.Connection) -> str:
-    """SQL for `curves c` rows the site publishes.
-
-    A database written before tools/admit_axis_verified.py ran has no admission
-    column, and PRAGMA-gating it here keeps such a database importable - the
-    same treatment every other optional column gets. The fallback publishes the
-    original clean set, which is what those databases mean.
-    """
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(curves)")}
-    if "admission" not in columns:
-        return LEGACY_PUBLISHED
-    marks = ",".join(f"'{name}'" for name in PUBLISHED_ADMISSION)
-    return f"c.admission in ({marks})"
+# Which curves the site publishes, and under which label, is decided in
+# site_admission.py: published_predicate() there is referenced by every
+# selection below so the figure list, the curve list, the descriptors and the
+# per-figure data files can never disagree about what is published. Since
+# 2026-10-21 it is every curve the paper releases. A database written before
+# tools/admit_axis_verified.py ran has no admission columns and still imports,
+# publishing the original clean set, which is what such a database means.
 
 
 def published_text(value: Any) -> str | None:
@@ -804,17 +816,23 @@ def fetch_metadata(
     # Splitting them is not cosmetic here: without it, a figure whose sibling
     # curve was re-admitted would report that curve as missing while displaying
     # it three rows below.
-    reason_columns = {row[1] for row in conn.execute("PRAGMA table_info(curves)")}
-    if "admission_reason" in reason_columns:
+    #
+    # Since 2026-10-21 every accepted curve is published with its class, so on a
+    # current database nothing is withheld and both counts are 0 for every
+    # figure; a re-import writes those zeros, and the "not published" badges
+    # that read them disappear. The query keeps its general form - curves this
+    # run does NOT publish - instead of hardcoding zero, so the two columns stay
+    # true if a future rule ever withholds a curve again. It used to read
+    # admission = 'excluded', which would now count curves the page displays.
+    if has_admission(conn):
         by_reason = conn.execute(
             f"""
-            select figure_id,
-                   sum(admission_reason = 'model_derived'),
-                   sum(admission_reason is not null
-                       and admission_reason != 'model_derived')
-            from curves
-            where admission = 'excluded' and paper_id in ({marks})
-            group by figure_id
+            select c.figure_id,
+                   sum(c.admission_reason = 'model_derived'),
+                   sum(coalesce(c.admission_reason, '') != 'model_derived')
+            from curves c
+            where not ({published}) and c.paper_id in ({marks})
+            group by c.figure_id
             """,
             paper_ids,
         ).fetchall()
@@ -909,8 +927,9 @@ def fetch_metadata(
         "n_peaks",
     ]
     curve_select = [*base_curve_columns, *fidelity, *texts]
-    if "admission" in curve_columns:
-        curve_select.append("admission")
+    with_admission = has_admission(conn)
+    if with_admission:
+        curve_select += ["admission", "admission_reason"]
     if wavelength_flag_known:
         curve_select.append("first_peak_wavelength_assumed")
     if publish_peaks:
@@ -952,6 +971,17 @@ def fetch_metadata(
             context_roles.get(series_id), record["label"], record["sample_state"]
         )
         paper_id = record["paper_id"]
+        # The site label, mapped from the two local columns in one place
+        # (site_admission.py). A pre-admission database held only clean-set
+        # curves, so "clean" is a fact about its rows, not a placeholder.
+        # require_all_mapped() has already refused any pair the map lacks.
+        admission = (
+            site_admission(record["admission"], record["admission_reason"])
+            if with_admission
+            else "clean"
+        )
+        if admission not in SITE_ADMISSIONS:
+            raise ValueError(f"{series_id}: unmapped admission {record.get('admission')!r}")
         curve: dict[str, Any] = {
             "id": series_id,
             "figure_id": figure_id,
@@ -965,11 +995,11 @@ def fetch_metadata(
             "point_count": bounded_int(record["n_points"]) or 0,
             "peak_count": bounded_int(record["n_peaks"]),
             "data_path": f"papers/{paper_id}/{figure_id}/curves.csv.gz",
-            # True only for the original corpus definition. A re-admitted
-            # curve is published but is NOT in the clean set, and conflating
-            # them here would silently restate the paper's 7,713-curve figure.
-            "in_clean_set": record.get("admission", "clean") == "clean",
-            "admission": record.get("admission") or "clean",
+            # True only for the original corpus definition. Every other class
+            # is published but is NOT in the clean set, and conflating them
+            # here would silently restate the paper's 7,713-curve figure.
+            "in_clean_set": admission == "clean",
+            "admission": admission,
             # NULL means "not linked to any other paper by label". It never
             # means "unique material", and the empty state must say so.
             "material_group_id": group_of_series.get(series_id),
@@ -1095,11 +1125,13 @@ def read_wavelengths(conn: sqlite3.Connection, paper_ids: list[str]) -> dict[str
     that would stop being true without anyone noticing.
 
     It has now stopped being true. curves.admission re-admitted six of that
-    paper's curves, and they are the only published rows whose
-    first_peak_wavelength_source reads 'paper_reported'. The other 9,379 are
-    still assumed. Nothing here changed to make that happen - the provenance
-    column carried it - but the difference is real and the UI must keep showing
-    it per row rather than describing the corpus with one blanket sentence.
+    paper's curves, and they were the first published rows whose
+    first_peak_wavelength_source reads 'paper_reported'; publishing every
+    accepted curve from 2026-10-21 publishes the rest of that paper too, and
+    every other curve is still assumed. Nothing here changed to make that
+    happen - the provenance column carried it - but the difference is real and
+    the UI must keep showing it per row rather than describing the corpus with
+    one blanket sentence.
     """
     if "wavelength_angstrom" not in {
         row[1] for row in conn.execute("PRAGMA table_info(papers)")
@@ -1301,14 +1333,18 @@ def figure_csv_gz(conn: sqlite3.Connection, figure_id: str) -> bytes:
                     "two_theta_uncertainty_deg",
                 ]
             )
+            # The same predicate fetch_metadata publishes rows by, so a figure's
+            # file holds exactly the curves its page lists. This was the literal
+            # admission in ('clean','axis_verified'), which would have left the
+            # newly published classes out of the file while the page showed them.
             rows = conn.execute(
-                """
+                f"""
                 select c.series_id, c.label, c.material_name, c.sample_state,
                        p.two_theta_deg, p.relative_intensity,
                        c.two_theta_uncertainty_deg
                 from curves c
                 join points p on p.series_id=c.series_id
-                where c.figure_id=? and c.admission in ('clean','axis_verified')
+                where c.figure_id=? and {published_predicate(conn)}
                 order by c.series_id, p.two_theta_deg
                 """,
                 (figure_id,),
@@ -1429,6 +1465,7 @@ def refresh_data_files_only(args: argparse.Namespace, db_path: Path) -> int:
         raise RuntimeError("SUPABASE_URL and SUPABASE_SECRET_KEY are required")
     conn = sqlite3.connect(db_path)
     try:
+        require_all_mapped(conn)
         paper_ids = set(deterministic_publishable_papers(conn, args.limit))
         published = published_predicate(conn)
         refs = [
@@ -1477,6 +1514,13 @@ def summarize_curves(curves: list[dict[str, Any]], groups: list[dict[str, Any]])
     lines: list[str] = []
     if not curves:
         return ""
+    admissions = tally(curves, "admission")
+    lines.append(
+        "admission: "
+        + render_tally(admissions)
+        + f"  (in_clean_set {sum(1 for curve in curves if curve['in_clean_set'])};"
+        " every class is published, and each curve says which it is in)"
+    )
     peak_status = tally(curves, "first_peak_status")
     if peak_status:
         lines.append("first_peak_status: " + render_tally(peak_status))
@@ -1613,7 +1657,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", type=Path, default=Path("../outputs/pxrd.db"))
     parser.add_argument("--assets-root", type=Path, default=Path("../outputs/full-run-01"))
-    parser.add_argument("--limit", type=int, default=10, help="Number of clean-set papers to include")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Number of publishable papers to include, in accession-number order",
+    )
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force-assets", action="store_true")
@@ -1699,6 +1748,7 @@ def main() -> int:
 
     conn = sqlite3.connect(db_path)
     try:
+        require_all_mapped(conn)
         paper_ids = deterministic_publishable_papers(conn, args.limit)
         if args.limit > len(paper_ids):
             print(
@@ -1722,7 +1772,8 @@ def main() -> int:
 
     print(
         f"Selected {len(papers)} papers, {len(figures)} figures, "
-        f"and {len(curves)} clean curves."
+        f"and {len(curves)} curves "
+        f"({sum(1 for curve in curves if curve['in_clean_set'])} of them clean)."
     )
     print(
         summarize_verification(

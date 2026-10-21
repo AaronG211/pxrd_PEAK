@@ -86,6 +86,9 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+# Sibling module; Python puts this script's directory on sys.path.
+from site_admission import published_predicate
+
 
 SEED = "pxrd-free-pilot-v1"
 CROSSREF_WORKS = "https://api.crossref.org/works"
@@ -498,22 +501,16 @@ def extract_publication_status(
 def _publishable(conn: sqlite3.Connection) -> list[tuple]:
     """Every paper the site publishes at least one curve from.
 
-    Mirrors the importer's set. `curves.admission` re-admits curves that
-    figure-level quarantine took as collateral (tools/admit_axis_verified.py),
-    and 238 papers reach the site only that way; selecting on in_clean_set
-    alone would leave exactly those papers without a title or metadata. The
-    column is optional, so a database predating it falls back to the original
-    set rather than failing the run.
+    Mirrors the importer's set by using its predicate (site_admission.py).
+    Since 2026-10-21 the site publishes every accepted curve, so this is all
+    2,370 papers; 370 of them have no clean-set curve, and selecting on
+    in_clean_set alone would leave exactly those papers without a title or
+    metadata. A database predating the admission columns falls back to the
+    original clean set inside the predicate rather than failing the run.
     """
-    try:
-        return conn.execute(
-            "select distinct paper_id from curves "
-            "where in_clean_set=1 or admission='axis_verified'"
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return conn.execute(
-            "select distinct paper_id from curves where in_clean_set=1"
-        ).fetchall()
+    return conn.execute(
+        f"select distinct c.paper_id from curves c where {published_predicate(conn)}"
+    ).fetchall()
 
 
 def deterministic_clean_papers(conn: sqlite3.Connection, limit: int) -> list[str]:

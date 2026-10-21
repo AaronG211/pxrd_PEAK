@@ -129,6 +129,8 @@ type DbCurveFacet = {
   material_name: string | null;
   curve_role: CurveRole;
   sample_state: string | null;
+  // Present only once the curve-admission migration has run.
+  admission?: CurveAdmission | null;
 };
 
 type PaperFacetAccumulator = {
@@ -136,6 +138,7 @@ type PaperFacetAccumulator = {
   curveRoles: Set<CurveRole>;
   sampleStates: Set<string>;
   qualityStatuses: Set<FigureQualityStatus>;
+  admissionCounts: Partial<Record<CurveAdmission, number>>;
 };
 
 const POSTGREST_PAGE_SIZE = 1000;
@@ -226,7 +229,12 @@ function emptyFacets(): PaperFacetAccumulator {
     curveRoles: new Set(),
     sampleStates: new Set(),
     qualityStatuses: new Set(),
+    admissionCounts: {},
   };
+}
+
+function countAdmission(facets: PaperFacetAccumulator, admission: CurveAdmission): void {
+  facets.admissionCounts[admission] = (facets.admissionCounts[admission] ?? 0) + 1;
 }
 
 function sortedValues(values: Set<string>): string[] {
@@ -239,6 +247,7 @@ function summarizeFacets(facets: PaperFacetAccumulator) {
     curveRoles: [...facets.curveRoles].sort(),
     sampleStates: sortedValues(facets.sampleStates),
     qualityStatuses: [...facets.qualityStatuses].sort(),
+    admissionCounts: { ...facets.admissionCounts },
   };
 }
 
@@ -252,6 +261,7 @@ function demoFacets(paper: PaperDetail) {
       if (material) facets.materialNames.add(material);
       if (state) facets.sampleStates.add(state);
       facets.curveRoles.add(curve.role);
+      countAdmission(facets, curve.admission);
     }
   }
   return summarizeFacets(facets);
@@ -301,15 +311,19 @@ async function fetchAllFigureFacets(): Promise<DbFigureFacet[]> {
 }
 
 async function fetchAllCurveFacets(): Promise<DbCurveFacet[]> {
+  const withAdmission = await hasColumn("pxrd_curves", CURVE_ADMISSION_COLUMN);
+  const columns = `id, figure_id, material_name, curve_role, sample_state${
+    withAdmission ? `, ${CURVE_ADMISSION_COLUMN}` : ""
+  }`;
   const rows: DbCurveFacet[] = [];
   for (let from = 0; ; from += POSTGREST_PAGE_SIZE) {
     const { data, error } = await supabase!
       .from("pxrd_curves")
-      .select("id, figure_id, material_name, curve_role, sample_state")
+      .select(columns)
       .order("id")
       .range(from, from + POSTGREST_PAGE_SIZE - 1);
     if (error) throw error;
-    const page = (data ?? []) as DbCurveFacet[];
+    const page = (data ?? []) as unknown as DbCurveFacet[];
     rows.push(...page);
     if (page.length < POSTGREST_PAGE_SIZE) break;
   }
@@ -399,6 +413,7 @@ function mapPaper(row: DbPaper): PaperDetail {
       if (material) facets.materialNames.add(material);
       if (state) facets.sampleStates.add(state);
       facets.curveRoles.add(curve.role);
+      countAdmission(facets, curve.admission);
     }
   }
 
@@ -510,6 +525,7 @@ type CurveFacet = {
   materialName: string | null;
   role: CurveRole;
   sampleState: string | null;
+  admission: CurveAdmission;
 };
 type IndexRows = { papers: DbPaperSummary[]; figures: FigureFacet[]; curves: CurveFacet[] };
 
@@ -547,7 +563,7 @@ const SNAPSHOT_PAPER_COLUMNS = [PAPER_INDEX_BASE_COLUMNS, PAPER_STATUS_COLUMNS, 
 const SNAPSHOT_FIGURE_COLUMNS = ["paper", "quality_status"];
 const SNAPSHOT_CURVE_COLUMNS = [
   "paper", "material_name", "curve_role", "sample_state",
-  "first_peak_status", "stacking_hump_status", "has_ratio",
+  "first_peak_status", "stacking_hump_status", "has_ratio", "admission",
 ];
 
 let indexSnapshotPromise: Promise<IndexSnapshot | null> | null = null;
@@ -586,7 +602,7 @@ function decodeIndexSnapshot(raw: unknown): IndexSnapshot | null {
     figures.push({ paperId, qualityStatus: quality as FigureQualityStatus });
   }
   const curves: SnapshotCurve[] = [];
-  for (const [paper, material, role, state, firstPeak, hump, ratio] of s.curves as unknown[][]) {
+  for (const [paper, material, role, state, firstPeak, hump, ratio, admission] of s.curves as unknown[][]) {
     const paperId = paperAt(paper);
     if (!paperId) return null;
     curves.push({
@@ -597,6 +613,9 @@ function decodeIndexSnapshot(raw: unknown): IndexSnapshot | null {
       firstPeakStatus: (firstPeak as string | null) ?? null,
       humpStatus: (hump as string | null) ?? null,
       hasRatio: ratio === 1,
+      // Same fallback as the live path: a database without the column held
+      // only clean-set curves.
+      admission: (typeof admission === "string" ? admission : "clean") as CurveAdmission,
     });
   }
   return {
@@ -667,6 +686,7 @@ async function loadIndexRowsLive(): Promise<IndexRows> {
       materialName: curve.material_name,
       role: curve.curve_role,
       sampleState: curve.sample_state,
+      admission: curve.admission ?? "clean",
     });
   }
   return {
@@ -707,6 +727,7 @@ export async function fetchPapers(): Promise<PaperSummary[]> {
     if (material) facets.materialNames.add(material);
     if (state) facets.sampleStates.add(state);
     facets.curveRoles.add(curve.role);
+    countAdmission(facets, curve.admission);
   }
   // Free: these are the same rows the facet pass already paid for.
   const labelIndex = buildMaterialLabelIndex(labelEntries);
@@ -722,8 +743,9 @@ export async function fetchPapers(): Promise<PaperSummary[]> {
     year: row.publication_year,
     figureCount: row.figure_count,
     curveCount: row.curve_count,
-    // Falls back to the full count, which is what it equalled before any curve
-    // was re-admitted: on a pre-migration database the two sets are identical.
+    // Falls back to the full count, which is what it equalled before any
+    // non-clean curve was published: on a pre-migration database the two sets
+    // are identical.
     cleanCurveCount: row.clean_curve_count ?? row.curve_count,
     cleanFigureCount: row.clean_figure_count ?? row.figure_count,
     materialCount: row.material_count,
