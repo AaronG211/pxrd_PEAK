@@ -1,0 +1,10 @@
+{
+  "upload_type": "software",
+  "title": "pxrd_PEAK: extraction pipeline and website for the Open PXRD Database",
+  "description": "Code that extracts calibrated powder X-ray diffraction (PXRD) curves from figures in published covalent organic framework (COF) papers, combining a vision large language model with classical computer vision, and the website and read-only API of the Open PXRD Database (https://pxrd-peak.vercel.app). The digitized dataset itself is archived as a separate Zenodo record under CC BY 4.0.",
+  "creators": [
+    {"name": "Gao, Shenghan", "affiliation": "Washington University in St. Louis"}
+  ],
+  "license": "MIT",
+  "keywords": ["powder X-ray diffraction", "covalent organic frameworks", "figure digitization", "vision language model", "computer vision", "materials data"]
+}
