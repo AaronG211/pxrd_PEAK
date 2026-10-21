@@ -11,7 +11,8 @@
  * repeat visit 1.4-3.3 s. The data changes only when the importer runs.
  *
  * WHAT. Raw rows only — exactly what the live queries return, minus columns the
- * page never reads. Every derivation (facets, the material label index, the
+ * page never reads. Every published curve is a row, whatever its admission
+ * class: since 2026-10-21 that is every curve the paper releases. Every derivation (facets, the material label index, the
  * peak-search counts) stays in src/lib/api.ts, applied identically to snapshot
  * rows and live rows, so there is one implementation of each and nothing here
  * can drift from it.
@@ -57,13 +58,21 @@ export const PAPER_COLUMNS = [
  * tuples. Most of what remains is titles and author lists, which search reads.
  */
 export const FIGURE_COLUMNS = ["paper", "quality_status"];
+/**
+ * `admission` was added when the site began publishing every curve the paper
+ * releases (2026-10-21), so the browse page can say what the non-clean part of
+ * the corpus is made of — re-admitted, shape-flagged, axis-unconfirmed,
+ * model-derived — instead of one undifferentiated "other" number. Appending it
+ * changes the column list, so a snapshot written before it fails the client's
+ * verbatim check and the page reads live rather than misreading old tuples.
+ */
 export const CURVE_COLUMNS = [
   "paper", "material_name", "curve_role", "sample_state",
-  "first_peak_status", "stacking_hump_status", "has_ratio",
+  "first_peak_status", "stacking_hump_status", "has_ratio", "admission",
 ];
 const FIGURE_SELECT = "id,paper_id,quality_status";
 const CURVE_SELECT = "figure_id,material_name,curve_role,sample_state,"
-  + "first_peak_status,stacking_hump_status,intensity_ratio_100_001";
+  + "first_peak_status,stacking_hump_status,intensity_ratio_100_001,admission";
 
 /**
  * The column groups whose existence gates the peak search, copied verbatim
@@ -158,11 +167,20 @@ if (!url || !key) {
     const orphanCurves = curves.filter((c) => !figurePaper.has(c.figure_id)).length;
     const indexCurves = papers.reduce((n, p) => n + (p.curve_count ?? 0), 0);
     const indexFigures = papers.reduce((n, p) => n + (p.figure_count ?? 0), 0);
+    // The masthead's "clean curves only" reading comes from clean_curve_count
+    // in the view, the class breakdown from the curve rows. Both must describe
+    // the same corpus.
+    const indexClean = papers.reduce((n, p) => n + (p.clean_curve_count ?? 0), 0);
+    const byAdmission = {};
+    for (const c of curves) byAdmission[c.admission] = (byAdmission[c.admission] ?? 0) + 1;
+    const rowClean = byAdmission.clean ?? 0;
 
-    if (orphanFigures || orphanCurves || indexCurves !== curves.length || indexFigures !== figures.length) {
+    if (orphanFigures || orphanCurves || indexCurves !== curves.length || indexFigures !== figures.length
+      || indexClean !== rowClean) {
       discard(
         `rows disagree (orphan figures ${orphanFigures}, orphan curves ${orphanCurves}, ` +
-        `index counts ${indexFigures}/${indexCurves} vs rows ${figures.length}/${curves.length})`,
+        `index counts ${indexFigures}/${indexCurves} vs rows ${figures.length}/${curves.length}, ` +
+        `clean ${indexClean} vs ${rowClean})`,
       );
     } else {
       const paperIndex = new Map(papers.map((p, i) => [p.id, i]));
@@ -184,6 +202,7 @@ if (!url || !key) {
           c.stacking_hump_status ?? null,
           // Only whether a ratio exists is ever counted, never its value.
           c.intensity_ratio_100_001 === null || c.intensity_ratio_100_001 === undefined ? 0 : 1,
+          c.admission ?? null,
         ]),
       };
       mkdirSync(outDir, { recursive: true });
@@ -192,9 +211,13 @@ if (!url || !key) {
       writeFileSync(tmp, JSON.stringify(snapshot));
       renameSync(tmp, outFile);
       const kib = Math.round(JSON.stringify(snapshot).length / 1024);
+      const classes = Object.entries(byAdmission)
+        .sort(([a], [b]) => String(a).localeCompare(String(b)))
+        .map(([name, n]) => `${name} ${n}`)
+        .join(", ");
       console.log(
         `[index-snapshot] ${papers.length} papers, ${figures.length} figures, ${curves.length} curves ` +
-        `-> public/data/paper-index.json (${kib} KiB before compression, ${Date.now() - started} ms)`,
+        `(${classes}) -> public/data/paper-index.json (${kib} KiB before compression, ${Date.now() - started} ms)`,
       );
     }
   } catch (cause) {

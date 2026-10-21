@@ -14,6 +14,7 @@ import { Link, useParams } from "react-router-dom";
 import { CurvePlot } from "../components/CurvePlot";
 import type { CurvePlotSeries } from "../components/CurvePlot";
 import { PublicationStatusBadge, PublicationStatusBanner } from "../components/PublicationStatusBadge";
+import { NON_CLEAN_ADMISSIONS, admissionMark } from "../lib/admission";
 import { fetchPaper, getMaterialLabelIndex } from "../lib/api";
 import { describeCurveDataError, fetchFigureCurves, isAbortError } from "../lib/curveData";
 import { EMPTY_MATERIAL_LABEL_INDEX, groupForLabel } from "../lib/materialGroups";
@@ -21,6 +22,7 @@ import type { MaterialLabelGroup, MaterialLabelIndex } from "../lib/materialGrou
 import { WAVELENGTH_ASSUMPTION_LONG } from "../lib/peakSearch";
 import { usePageMeta } from "../hooks/usePageMeta";
 import type {
+  CurveAdmission,
   CurveRole,
   FigureVerificationStatus,
   FirstPeakStatus,
@@ -204,6 +206,11 @@ function FigureQualityBadges({ figure }: { figure: PxrdFigure }) {
 
         Both fall back to null on a pre-migration database, and a null badge is
         simply not drawn.
+
+        Since 2026-10-21 the site publishes every curve the paper releases, so
+        after a re-import both counts are 0 on every figure and neither badge is
+        drawn: those curves are now rows in the inventory below, each marked
+        with its class. The badges stay for a record imported before that.
       */}
       {omittedComputed > 0 && (
         <span className="badge" title="Simulated, Pawley-refined or difference traces. This database publishes measured patterns, so these are recorded rather than extracted.">
@@ -223,32 +230,48 @@ function FigureQualityBadges({ figure }: { figure: PxrdFigure }) {
 }
 
 /**
- * Marks a curve the figure-level quarantine rule excluded as collateral.
+ * Marks a curve outside the clean set with its class.
  *
- * That rule drops every trace in a panel when any one of them is flagged. It is
- * a proxy: the shape filter cannot see a misread 2θ axis, and a panel has only
- * one axis, so a bad neighbour is treated as evidence against the panel. Here
- * the axis was fit twice — from tick marks and from OCR of the labels — and the
- * two agreed, which answers the question the proxy was standing in for.
- *
- * Deliberately understated. It is a superscript, not a warning colour, because
- * the measurement does not support alarm: every re-admitted curve sits in a
- * cross-validated figure against 82.6% of clean ones. The mark exists so the
- * distinction is never hidden, not to imply the data is worse.
+ * The site publishes every curve the paper releases and labels the non-clean
+ * ones rather than withholding them, so the label has to be on the row itself:
+ * a reader copying one curve must not be able to miss that its own trace failed
+ * a shape check, or that it is a simulation. Same form for every class — a
+ * superscript word, explained in one line under the table — with colour as the
+ * only difference. `re-admitted` stays the quietest because the measurement does
+ * not support alarm: every such curve sits in a cross-validated figure, against
+ * 82.6% of clean ones. The wording lives in lib/admission.ts so the browse page
+ * names the classes the same way.
  */
-function ReadmittedMark() {
+function AdmissionMark({ admission }: { admission: CurveAdmission }) {
+  const mark = admissionMark(admission);
+  if (!mark) return null;
   return (
     <span
-      className="ml-1 cursor-help align-super text-[10px] font-semibold text-slate-400"
-      title={
-        "Re-admitted. Another trace in this figure failed the automated shape " +
-        "checks, which by itself would have excluded this one too. This curve " +
-        "passed on its own, and the figure's 2\u03B8 axis was cross-validated by " +
-        "two independent fits."
-      }
+      className={`ml-1 cursor-help align-super text-[10px] font-semibold ${mark.tone}`}
+      title={mark.explanation}
     >
-      re-admitted
+      {mark.mark}
     </span>
+  );
+}
+
+/** One plain-English line per mark that appears in this figure's inventory. */
+function AdmissionNotes({ curves }: { curves: PxrdCurve[] }) {
+  const present = NON_CLEAN_ADMISSIONS.filter((admission) =>
+    curves.some((curve) => curve.admission === admission),
+  );
+  return (
+    <>
+      {present.map((admission) => {
+        const mark = admissionMark(admission)!;
+        return (
+          <p key={admission}>
+            <span className={`font-semibold ${mark.tone}`}>{mark.mark}</span>
+            <span className="sr-only">:</span> — {mark.explanation}
+          </p>
+        );
+      })}
+    </>
   );
 }
 
@@ -588,10 +611,12 @@ function CurveDescriptors({ figure }: { figure: PxrdFigure }) {
   /*
     The summary used to read "{rows.length} of N curves", which was a true
     coverage figure only while every published curve had a descriptor. It no
-    longer is: `not_computed` is a non-null status, so a re-admitted curve — none
-    of which were ever passed through tools/descriptors.py — satisfies the filter
-    above and was counted as covered. A figure of six such curves announced
-    "6 of 6" above a table whose every row said "no descriptor computed".
+    longer is: `not_computed` is a non-null status, so a curve that was never
+    passed through tools/descriptors.py — the re-admitted ones when they first
+    appeared, and the 2,060 shape-flagged, axis-unconfirmed and model-derived
+    curves published from 2026-10-21 — satisfies the filter above and was
+    counted as covered. A figure of six such curves announced "6 of 6" above a
+    table whose every row said "no descriptor computed".
 
     So the headline counts curves that actually carry a NUMBER, and the shortfall
     is named rather than left for the reader to notice by scrolling.
@@ -911,7 +936,7 @@ function FigureCard({
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 font-medium text-slate-900">
                       {curve.label}
-                      {curve.admission === "axis_verified" && <ReadmittedMark />}
+                      <AdmissionMark admission={curve.admission} />
                     </td>
                     <td className="px-4 py-3">
                       <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${roleStyles[curve.role]}`}>
@@ -1021,6 +1046,7 @@ function FigureCard({
         </div>
 
         <div className="mt-3 space-y-2 text-xs leading-relaxed text-slate-600">
+          <AdmissionNotes curves={figure.curves} />
           {showFirstPeak && assumedWavelength && (
             <p>
               <span aria-hidden="true" className="font-semibold">†</span>{" "}

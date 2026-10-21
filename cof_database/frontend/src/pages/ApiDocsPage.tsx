@@ -21,7 +21,13 @@ import { usePageMeta } from "../hooks/usePageMeta";
  */
 
 const BASE = "https://pxrd-peak.vercel.app/api/v1";
-const RELEASE_TAG = "data-2026-10-01";
+/**
+ * The bulk release matching what this API serves. data-2026-10-01 held the
+ * 9,385 curves the site published then; from 2026-10-21 the site publishes all
+ * 11,445 with their admission class, and the release with that scope is this
+ * tag (scripts/export_dataset.py --scope published).
+ */
+const RELEASE_TAG = "data-2026-10-21";
 const RELEASE_PAGE = `https://github.com/AaronG211/pxrd_PEAK/releases/tag/${RELEASE_TAG}`;
 const RELEASE_FILES = `https://github.com/AaronG211/pxrd_PEAK/releases/download/${RELEASE_TAG}`;
 
@@ -101,7 +107,7 @@ const CURVE_FIELDS: Array<[string, ReactNode]> = [
   ["material_group", <>The cross-paper label group, or <Mono>null</Mono>. See <a className="font-medium text-blue-700 hover:underline" href="#materials">Materials</a>.</>],
   ["sample_state", "As the paper describes it (as-synthesised, activated, after soaking…); often null."],
   ["role", <>What the source said the trace was: <Mono>experimental</Mono> where it was labelled so, <Mono>reference</Mono> for a reference card (e.g. JCPDS), otherwise <Mono>unclassified</Mono> — about half the corpus.</>],
-  ["admission", <><Mono>clean</Mono> or <Mono>axis_verified</Mono>; see <a className="font-medium text-blue-700 hover:underline" href="#reading">Reading the data</a>.</>],
+  ["admission", <>Which class the curve is in: <Mono>clean</Mono>, <Mono>axis_verified</Mono>, <Mono>shape_flagged</Mono>, <Mono>axis_unconfirmed</Mono> or <Mono>model_derived</Mono>. Every accepted curve is published with its class; see <a className="font-medium text-blue-700 hover:underline" href="#reading">Reading the data</a>.</>],
   ["two_theta_min_deg, two_theta_max_deg", "The 2θ window this trace was plotted over."],
   ["point_count", "Number of digitized points."],
   ["two_theta_uncertainty_deg", "Per-curve error of the 2θ axis fit (median about 0.05°)."],
@@ -120,8 +126,8 @@ const CURVE_PARAMS: Array<[string, ReactNode]> = [
   ["first_peak_status", "Comma-separated subset of ok, low_confidence, truncated_at_window_start, no_bragg_peak."],
   ["stacking_hump_status", "hump_detected, no_hump_detected, window_not_covered or not_computed."],
   ["axis_verification", "axis_cross_validated, axis_single_method or axis_arbitrated."],
-  ["role", <><strong className="font-semibold text-slate-900">Not a way to select measured patterns.</strong> Traces labelled simulated, Pawley/Rietveld-refined or difference are not published, so those three values return nothing; and about half the corpus is <Mono>unclassified</Mono>, so <Mono>role=experimental</Mono> silently drops it.</>],
-  ["admission", "clean or axis_verified."],
+  ["role", <><strong className="font-semibold text-slate-900">Not a way to select measured patterns.</strong> About half the corpus is <Mono>unclassified</Mono>, so <Mono>role=experimental</Mono> silently drops it; and <Mono>simulated</Mono>, <Mono>refined</Mono> and <Mono>difference</Mono> find only some of the <Mono>model_derived</Mono> curves. To leave computed traces out, filter on <Mono>admission</Mono> instead.</>],
+  ["admission", <>One class or a comma-separated subset of <Mono>clean</Mono>, <Mono>axis_verified</Mono>, <Mono>shape_flagged</Mono>, <Mono>axis_unconfirmed</Mono>, <Mono>model_derived</Mono>. Measured patterns only: <Mono>admission=clean,axis_verified,shape_flagged,axis_unconfirmed</Mono>. The strictest tier: <Mono>admission=clean</Mono>.</>],
   ["sort", "series_id (default), first_peak or -first_peak."],
   ["limit, offset", "Page size 1–1000 (default 100) and start position."],
 ];
@@ -138,7 +144,7 @@ const PAPER_PARAMS: Array<[string, ReactNode]> = [
   ["year, year_min, year_max", "Publication year."],
   ["journal", "Substring of the journal name."],
   ["publication_status", "active, corrected, retracted, withdrawn or concern."],
-  ["include_readmitted", "Default true. false keeps only papers with at least one clean curve."],
+  ["include_readmitted", "Default true. false keeps only papers with at least one clean curve, dropping papers whose every curve is in another class."],
   ["sort", "paper_number (default), year, -year or -curves."],
   ["limit, offset", "Page size 1–1000 (default 100) and start position."],
 ];
@@ -185,9 +191,11 @@ export function ApiDocsPage() {
         A <strong className="font-semibold text-slate-800">paper</strong> has figures; a{" "}
         <strong className="font-semibold text-slate-800">figure</strong> has curves; a{" "}
         <strong className="font-semibold text-slate-800">curve</strong> is one trace digitized from that
-        figure, with its 2θ / intensity points. Traces the figure labels as simulated, refined or difference
-        curves are not published, so what remains is measured patterns — as far as the figures&rsquo; own labels
-        can tell.
+        figure, with its 2θ / intensity points. Every curve the pipeline accepted is published, and each says
+        which class it is in (<a href="#reading" className={link}>admission</a>). Traces the figure labels as
+        simulated, refined or difference curves were filtered out during extraction; the few that slipped past are
+        published as <Mono>model_derived</Mono>, so everything else is a measured pattern — as far as the
+        figures&rsquo; own labels can tell.
       </p>
       <p className="mt-4 inline-block rounded-md border border-slate-200 bg-white px-3 py-1.5 font-mono text-sm text-slate-900">
         {BASE}
@@ -240,10 +248,13 @@ papers = pd.read_csv(f"{REL}/papers.csv.gz")   # one row per paper
 points = pd.read_csv(f"{REL}/points.csv.gz")   # series_id, two_theta_deg, relative_intensity`}</Code>
           <p>
             <strong className="font-semibold text-slate-900">Through the API, fetch per figure, not per curve.</strong>{" "}
-            Each figure&rsquo;s file holds all of its curves, so the corpus is 4,275 requests instead of 9,385, and
-            each one is a redirect to a static file. Measured on 2026-10-01 from a US connection: about 113 MB in
-            2.4 minutes with 16 parallel requests; the same data one curve at a time takes about an hour and a half
-            sequentially. Please keep to 8 parallel requests or fewer.
+            Each figure&rsquo;s file holds all of its curves, so the corpus is{" "}
+            {counts
+              ? `${counts.figures.toLocaleString()} requests instead of ${counts.curves.toLocaleString()}`
+              : "one request per figure instead of one per curve"}
+            , and each one is a redirect to a static file. Measured on 2026-10-01 from a US connection, when the
+            corpus was 4,275 figures: about 113 MB in 2.4 minutes with 16 parallel requests; the same data one curve
+            at a time took about an hour and a half sequentially. Please keep to 8 parallel requests or fewer.
           </p>
           <Code>{`import io
 from concurrent.futures import ThreadPoolExecutor
@@ -373,9 +384,31 @@ all_ok_curves = list(every(f"{BASE}/curves", first_peak_status="ok"))`}</Code>
               <Mono>first_peak.status</Mono>.
             </li>
             <li>
-              <Mono>admission</Mono> is <Mono>clean</Mono> when the curve and every other curve in its figure passed
-              the automated shape checks, and <Mono>axis_verified</Mono> when this curve passed but another one in the
-              same figure did not, in a figure whose 2θ axis was fit two independent ways that agreed.
+              <Mono>admission</Mono> says which class a curve is in. Every curve the pipeline accepted is published,
+              with its class, rather than the flagged ones being held back:
+              <ul className="mt-1.5 list-[circle] space-y-1 pl-5">
+                <li>
+                  <Mono>clean</Mono> — the curve and every other curve in its figure passed the automated shape
+                  checks. The strictest tier, and the one this project&rsquo;s own analyses use.
+                </li>
+                <li>
+                  <Mono>axis_verified</Mono> — this curve passed but another one in the same figure did not, in a
+                  figure whose 2θ axis was fit two independent ways that agreed.
+                </li>
+                <li>
+                  <Mono>axis_unconfirmed</Mono> — this curve passed and another one in the figure did not, and the
+                  figure&rsquo;s 2θ axis was <em>not</em> confirmed by two independent fits.
+                </li>
+                <li>
+                  <Mono>shape_flagged</Mono> — this curve&rsquo;s own trace failed an automated shape check (a
+                  staircase or notch in the line, or a trace that strayed off the printed curve). Compare it with the
+                  source figure before relying on it.
+                </li>
+                <li>
+                  <Mono>model_derived</Mono> — a label check after extraction found a simulated, refined or difference
+                  curve. Not a measured pattern.
+                </li>
+              </ul>
             </li>
             <li>
               <strong className="font-semibold text-slate-900">Training a model? Split by paper_id</strong>, never by

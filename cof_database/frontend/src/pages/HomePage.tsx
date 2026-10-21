@@ -43,7 +43,8 @@ import type {
   RatioBand,
 } from "../lib/peakSearch";
 import { isPublisherNotice, publicationStatusLabel } from "../lib/publicationStatus";
-import type { CurveRole, PaperSummary } from "../types";
+import type { CurveAdmission, CurveRole, PaperSummary } from "../types";
+import { ADMISSION_MARKS, NON_CLEAN_ADMISSIONS } from "../lib/admission";
 import { useEffect } from "react";
 import { usePageMeta, SITE_TITLE } from "../hooks/usePageMeta";
 
@@ -249,20 +250,21 @@ export function HomePage() {
    * justified in an earlier comment as "reproduces the corpus the paper
    * reports", which is false — the paper reports 2,370 papers and 11,445
    * curves. And it made the masthead disagree with the database: a visitor read
-   * "7,713 CURVES" on a site holding 9,385, with the other 1,672 reachable only
-   * by finding a checkbox inside a collapsed panel.
+   * "7,713 CURVES" on a site then holding 9,385, with the rest reachable only by
+   * finding a checkbox inside a collapsed panel.
    *
-   * A data resource's front page should state its own size. So the default is
-   * now the full published set, and this control narrows rather than widens —
+   * A data resource's front page should state its own size. Since 2026-10-21
+   * the site publishes the paper's full 11,445 curves with a per-curve flag, so
+   * the default is that full set, and this control narrows rather than widens —
    * unchecking it restricts the index to in_clean_set, which is the tier the
    * paper's validation section funnels down to and the tier
    * outputs/analysis/*.json is computed over. That is a real thing to want; it
    * is just not the right thing to open on.
    *
-   * Not a quality ordering: every re-admitted curve sits in a cross-validated
-   * figure, against 82.6% of the clean ones.
+   * Not a quality ordering of the classes it hides: every re-admitted curve
+   * sits in a cross-validated figure, against 82.6% of the clean ones.
    */
-  const [includeReadmitted, setIncludeReadmitted] = useState(true);
+  const [includeNonClean, setIncludeNonClean] = useState(true);
   /**
    * When the browse index was built, or null when it was read live. The list is
    * a deploy-time snapshot (scripts/generate-index-snapshot.mjs); paper pages
@@ -521,10 +523,10 @@ export function HomePage() {
           && paper.materialNames.length > 0);
       const labelKeyMatch = !labelKey || paper.sharedLabelKeys.includes(labelKey);
       const curveMatch = curveMatches === null || curveMatches.has(paper.id);
-      // Papers with no clean curve are reachable only when re-admitted curves
-      // are included. Their pages exist and work either way — this filters the
+      // Papers with no clean curve drop out when the index is restricted to the
+      // clean set. Their pages exist and work either way — this filters the
       // index, it does not unpublish anything.
-      const admissionMatch = includeReadmitted || paper.cleanCurveCount > 0;
+      const admissionMatch = includeNonClean || paper.cleanCurveCount > 0;
       return generalMatch
         && admissionMatch
         && materialMatch
@@ -545,28 +547,43 @@ export function HomePage() {
       if (sortBy === "figures") return b.figureCount - a.figureCount || a.paperNumber.localeCompare(b.paperNumber);
       return a.paperNumber.localeCompare(b.paperNumber);
     });
-  }, [curveMatches, includeReadmitted, labelKey, labelScope, materialQuery, materialScope, minimumCurves, papers, query, roleFilter, sortBy]);
+  }, [curveMatches, includeNonClean, labelKey, labelScope, materialQuery, materialScope, minimumCurves, papers, query, roleFilter, sortBy]);
 
   // The masthead states the size of the corpus you are actually browsing, so
   // all three numbers follow the same reading as the index below them. Mixing
-  // them — 2,238 papers over 7,713 curves — would describe a corpus that does
+  // them — 2,370 papers over 7,713 curves — would describe a corpus that does
   // not exist.
-  const paperCount = includeReadmitted
+  const paperCount = includeNonClean
     ? papers.length
     : papers.filter((paper) => paper.cleanCurveCount > 0).length;
   const figureCount = papers.reduce(
-    (sum, paper) => sum + (includeReadmitted ? paper.figureCount : paper.cleanFigureCount),
+    (sum, paper) => sum + (includeNonClean ? paper.figureCount : paper.cleanFigureCount),
     0,
   );
   const curveCount = papers.reduce(
-    (sum, paper) => sum + (includeReadmitted ? paper.curveCount : paper.cleanCurveCount),
+    (sum, paper) => sum + (includeNonClean ? paper.curveCount : paper.cleanCurveCount),
     0,
   );
-  const readmittedPaperCount = papers.length - papers.filter((p) => p.cleanCurveCount > 0).length;
-  const readmittedCurveCount = papers.reduce(
+  const nonCleanOnlyPaperCount = papers.length - papers.filter((p) => p.cleanCurveCount > 0).length;
+  const nonCleanCurveCount = papers.reduce(
     (sum, paper) => sum + (paper.curveCount - paper.cleanCurveCount),
     0,
   );
+  // What "outside the clean set" is made of, per class, from the same rows.
+  // Empty on a source that does not carry per-curve admission (an old
+  // snapshot is rejected, so in practice only a pre-migration database).
+  const nonCleanBreakdown = useMemo(() => {
+    const totals: Partial<Record<CurveAdmission, number>> = {};
+    for (const paper of papers) {
+      for (const [admission, n] of Object.entries(paper.admissionCounts)) {
+        const key = admission as CurveAdmission;
+        totals[key] = (totals[key] ?? 0) + (n ?? 0);
+      }
+    }
+    return NON_CLEAN_ADMISSIONS.flatMap((admission) =>
+      totals[admission] ? [`${totals[admission]!.toLocaleString()} ${ADMISSION_MARKS[admission].mark}`] : [],
+    );
+  }, [papers]);
   const visibleRoleOptions = useMemo(() => {
     const roles = new Set(papers.flatMap((paper) => paper.curveRoles));
     const hasExpModel = papers.some((paper) =>
@@ -980,31 +997,34 @@ export function HomePage() {
                     )}
                   </div>
 
-                  {readmittedCurveCount > 0 && (
+                  {nonCleanCurveCount > 0 && (
                     <label className="mt-3 flex items-start gap-2 text-xs text-slate-700">
                       <input
                         type="checkbox"
-                        checked={includeReadmitted}
+                        checked={includeNonClean}
                         onChange={(event) => {
-                          setIncludeReadmitted(event.target.checked);
+                          setIncludeNonClean(event.target.checked);
                           resetPage();
                         }}
                         className="mt-0.5 h-4 w-4 rounded border-slate-300 accent-blue-700"
                       />
                       <span>
-                        Include re-admitted curves ({readmittedCurveCount.toLocaleString()}{" "}
-                        curves across {readmittedPaperCount.toLocaleString()} papers
-                        reachable no other way).{" "}
+                        Include curves outside the clean set ({nonCleanCurveCount.toLocaleString()}{" "}
+                        curves{nonCleanBreakdown.length > 0 ? `: ${nonCleanBreakdown.join(", ")}` : ""};{" "}
+                        {nonCleanOnlyPaperCount.toLocaleString()}{" "}
+                        {nonCleanOnlyPaperCount === 1 ? "paper has" : "papers have"} no clean curve).{" "}
                         <span className="text-slate-500">
-                          On by default. Unchecking narrows the index to the strict
+                          On by default: the site publishes every curve the paper
+                          releases, and each paper page marks these curves and says
+                          why in one line. Unchecking narrows the index to the strict
                           clean set — the tier this project&rsquo;s offline analyses
-                          are computed over — and drops those papers from it. A
-                          re-admitted curve was held back only because another trace
-                          in the same figure failed the automated shape checks, a
-                          figure-level rule standing in for a misread 2θ axis. These
-                          passed on their own, in figures whose 2θ axis two
-                          independent fits agreed on: all of them clear that axis
-                          check, against 82.6% of the clean ones.
+                          are computed over — and drops those papers from it.
+                          Re-admitted and axis-unconfirmed curves passed the shape
+                          checks themselves but share a figure with one that did
+                          not, and differ in whether two independent fits agreed on
+                          its 2θ axis; shape-flagged curves failed a check
+                          themselves; model-derived ones are simulations, not
+                          measurements.
                         </span>
                       </span>
                     </label>
