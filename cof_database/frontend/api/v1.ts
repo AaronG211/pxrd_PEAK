@@ -39,7 +39,12 @@ const BUCKET = "pxrd-assets";
 const ID_PATTERN = /^[A-Za-z0-9._()-]{1,80}$/;
 
 const CURVE_ROLES = ["experimental", "simulated", "refined", "difference", "reference", "unclassified"];
-const ADMISSIONS = ["clean", "axis_verified"];
+/**
+ * Every curve the paper releases is published, each in one of these classes
+ * (scripts/site_admission.py). `clean` is the strict tier the project's offline
+ * analyses use; the other four say why a curve would once have been held back.
+ */
+const ADMISSIONS = ["clean", "axis_verified", "shape_flagged", "axis_unconfirmed", "model_derived"];
 const FIRST_PEAK_STATUSES = ["ok", "low_confidence", "truncated_at_window_start", "no_bragg_peak"];
 const HUMP_STATUSES = ["hump_detected", "no_hump_detected", "window_not_covered", "not_computed"];
 const AXIS_STATUSES = ["axis_cross_validated", "axis_single_method", "axis_arbitrated", "axis_unverified"];
@@ -493,26 +498,35 @@ function index() {
       "Intensities are relative and per-curve; they are not comparable across curves.",
       "d-spacings are derived from 2-theta at an assumed Cu K-alpha wavelength unless wavelength_source says otherwise.",
       "When training models, split by paper_id: curves in one figure share a material and an axis.",
-      "Traces the figure labels as simulated, refined or difference curves are not published. role records what the "
-        + "source said: 'experimental' where labelled so, 'reference' for reference cards, 'unclassified' for about half of all curves.",
+      "Every curve the pipeline accepted is published, and admission says which class it is in: clean, axis_verified, "
+        + "shape_flagged, axis_unconfirmed or model_derived. admission=clean is the strictest tier; see "
+        + `${SITE}/docs/api#reading`,
+      "Traces the figure labels as simulated, refined or difference curves were filtered out during extraction. The few "
+        + "that slipped past are published as admission=model_derived; to keep measured patterns only, leave that class out "
+        + "(admission=clean,axis_verified,shape_flagged,axis_unconfirmed).",
+      "role records what the source said: 'experimental' where labelled so, 'reference' for reference cards, "
+        + "'unclassified' for about half of all curves.",
       "Material groups are label agreement between papers, not verified material identity.",
     ],
   };
 }
 
 async function stats() {
-  const [papers, cleanPapers, figures, curves, cleanCurves] = await Promise.all([
+  const [papers, cleanPapers, figures, curves, ...byClass] = await Promise.all([
     count("pxrd_papers"),
     count("pxrd_paper_index", { clean_curve_count: "gt.0" }),
     count("pxrd_figures"),
     count("pxrd_curves"),
-    count("pxrd_curves", { admission: "eq.clean" }),
+    // Each class counted on its own, never derived as total minus the rest:
+    // then the five summing to `curves` is a check that no row carries a value
+    // outside the list, rather than true by construction.
+    ...ADMISSIONS.map((admission) => count("pxrd_curves", { admission: `eq.${admission}` })),
   ]);
   return {
     papers,
     figures,
     curves,
-    by_admission: { clean: cleanCurves, axis_verified: curves - cleanCurves },
+    by_admission: Object.fromEntries(ADMISSIONS.map((admission, i) => [admission, byClass[i]])),
     papers_with_a_clean_curve: cleanPapers,
   };
 }
@@ -524,6 +538,9 @@ async function listPapers(url: URL, params: Params) {
   const yearMax = params.num("year_max", 1800, 2200);
   const journal = params.str("journal");
   const status = params.oneOf("publication_status", PUBLICATION_STATUSES);
+  // Named when the only non-clean class was axis_verified; it now covers all
+  // four. false keeps papers with at least one clean curve. The name is part of
+  // the v1 contract, so it stays.
   const includeReadmitted = params.bool("include_readmitted", true);
   const sort = params.oneOf("sort", ["paper_number", "year", "-year", "-curves"]) ?? "paper_number";
   const limit = params.int("limit", 1, 1000, 100);
@@ -597,7 +614,9 @@ async function listCurves(url: URL, params: Params) {
       "'material_group' must be a group id from /api/v1/materials (lowercase letters, digits, @ and /).");
   }
   const role = params.oneOf("role", CURVE_ROLES);
-  const admission = params.oneOf("admission", ADMISSIONS);
+  // A comma-separated subset, so "everything but model_derived" is one request.
+  // A single value behaves exactly as it always has.
+  const admission = params.subset("admission", ADMISSIONS);
   const peakMin = params.num("first_peak_min", 0, 180);
   const peakMax = params.num("first_peak_max", 0, 180);
   const peakStatus = params.subset("first_peak_status", FIRST_PEAK_STATUSES);
@@ -629,7 +648,7 @@ async function listCurves(url: URL, params: Params) {
   if (material) query.set("material_name", `ilike.*${likeText(material)}*`);
   if (materialGroup) query.set("material_group_id", `eq.${materialGroup}`);
   if (role) query.set("curve_role", `eq.${role}`);
-  if (admission) query.set("admission", `eq.${admission}`);
+  if (admission) query.set("admission", `in.(${admission.join(",")})`);
   if (peakMin !== null) query.append("first_peak_two_theta_deg", `gte.${peakMin}`);
   if (peakMax !== null) query.append("first_peak_two_theta_deg", `lte.${peakMax}`);
   if (peakStatus) query.set("first_peak_status", `in.(${peakStatus.join(",")})`);

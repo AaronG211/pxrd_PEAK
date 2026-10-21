@@ -70,12 +70,14 @@ create table if not exists public.pxrd_figures (
   series_detected integer,
   series_digitized integer,
   -- Computed traces (simulated / Pawley-refined / difference) on this figure
-  -- that are excluded by policy. A disclosure, not a defect.
+  -- that the importer does NOT publish. A disclosure, not a defect.
   series_omitted_computed integer not null default 0,
-  -- Curves on this figure excluded by measurement: they failed the offline
-  -- shape filter, or the figure's axis was never cross-validated. Counted
-  -- apart from the line above because "we chose not to publish a simulation"
-  -- and "this trace did not pass" are different facts.
+  -- Curves on this figure the importer does NOT publish for a measured reason:
+  -- a failed shape check, or an axis never cross-validated. Counted apart from
+  -- the line above because "we chose not to publish a simulation" and "this
+  -- trace did not pass" are different facts. Since 2026-10-21 every accepted
+  -- curve is published with its class in pxrd_curves.admission, so both counts
+  -- are 0 on every figure; they stay true if a curve is ever withheld again.
   series_excluded_quality integer not null default 0,
   sort_order integer not null default 0,
   created_at timestamptz not null default now(),
@@ -139,18 +141,28 @@ create table if not exists public.pxrd_curves (
   peak_count integer check (peak_count is null or peak_count >= 0),
   data_path text,
   in_clean_set boolean not null default false,
-  -- How this curve earned its place. 'clean' is this database's own
-  -- conservative tier (curves.in_clean_set), NOT the paper's corpus - the paper
-  -- releases all 11,445 accepted curves with flags disclosed. See the WHY block
-  -- in migrations/20260910_curve_admission.sql.
-  -- (in_clean_set). 'axis_verified' is a curve that figure-level quarantine
-  -- excluded only because a SIBLING trace in the same panel was flagged, and
-  -- whose figure's 2-theta axis was independently cross-validated - the direct
-  -- measurement of the panel-misread risk that quarantine was standing in for.
-  -- See tools/admit_axis_verified.py and migrations/20260910_curve_admission.sql.
+  -- Which class this curve is in. The site publishes every curve the paper
+  -- releases - all 11,445 accepted curves - and says per curve why it would
+  -- once have been held back, rather than holding it back. See the WHY blocks
+  -- in migrations/20260910_curve_admission.sql and
+  -- migrations/20261021_publish_all_accepted.sql, and scripts/site_admission.py
+  -- for the mapping from the local database.
+  --   clean             this database's conservative tier (in_clean_set): the
+  --                     curve and every sibling passed the offline shape checks.
+  --   axis_verified     unflagged itself; a SIBLING trace in the panel was
+  --                     flagged; the figure's 2-theta axis was cross-validated
+  --                     by two independent fits.
+  --   shape_flagged     this curve's own trace failed the offline shape checks.
+  --   axis_unconfirmed  unflagged itself; a sibling was flagged; the figure's
+  --                     axis was NOT cross-validated by two methods.
+  --   model_derived     a label audit after extraction says this trace is a
+  --                     simulated, refined or difference curve that escaped the
+  --                     keyword filter.
   admission text not null default 'clean'
     constraint pxrd_curves_admission_check
-    check (admission in ('clean', 'axis_verified')),
+    check (admission in (
+      'clean', 'axis_verified', 'shape_flagged', 'axis_unconfirmed', 'model_derived'
+    )),
   constraint pxrd_curves_admission_clean_set_check
     check (in_clean_set = (admission = 'clean')),
   -- Per-curve automated fidelity numbers, carried from the extraction
@@ -360,16 +372,17 @@ select
   count(distinct f.id) filter (
     where f.quality_status = 'flagged'
   )::integer as figures_flagged,
-  -- What the default browse filter needs. curve_count is every published curve;
-  -- a paper with clean_curve_count = 0 has a working page but is reachable from
-  -- the index only with re-admitted curves included.
+  -- What the browse page's "clean curves only" option needs. curve_count is
+  -- every published curve, whatever its class; a paper with
+  -- clean_curve_count = 0 has a working page and is listed by default, but
+  -- drops out of the index when it is restricted to the clean set.
   count(distinct c.id) filter (
     where c.admission = 'clean'
   )::integer as clean_curve_count,
   -- Figures that still have a curve under the clean-set-only reading. A figure
-  -- whose every trace was re-admitted disappears from that view along with its
-  -- curves, so the masthead's three numbers stay one consistent reading of the
-  -- corpus rather than mixing two.
+  -- with no clean trace disappears from that view along with its curves, so the
+  -- masthead's three numbers stay one consistent reading of the corpus rather
+  -- than mixing two.
   count(distinct f.id) filter (
     where c.admission = 'clean'
   )::integer as clean_figure_count

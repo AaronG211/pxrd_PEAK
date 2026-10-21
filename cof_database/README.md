@@ -93,8 +93,11 @@ limiting and an automatic retention/expiration process.
 
 ## Import the deterministic Free-plan pilot
 
-The importer selects complete papers from the clean set using a stable hash, so
-rerunning the same limit always targets the same records. It converts source and
+The importer selects complete papers using a stable hash, so rerunning the same
+limit always targets the same records. It began as a clean-set pilot; since
+2026-10-21 it publishes every curve the paper releases (2,370 papers, 4,664
+figures, 11,445 curves), each labelled with its `admission` class — see
+"Curve admission" below. It converts source and
 digitized images to lossless WebP, combines each figure's points into one
 compressed CSV, skips existing objects, and upserts metadata.
 
@@ -118,6 +121,10 @@ columns; without them the upsert fails on the unknown columns.
 
 1. `supabase/migrations/20260828_verification_and_publication_status.sql`
 2. `supabase/migrations/20260830_peaks_crystallinity_and_material_labels.sql`
+3. `supabase/migrations/20260910_curve_admission.sql`
+4. `supabase/migrations/20261021_publish_all_accepted.sql` — widens
+   `pxrd_curves_admission_check` to the five classes. Run it before the import
+   that publishes them, or the curve upsert fails on the CHECK.
 
 Neither has been run against production. Migrations run in date order and older
 ones are not re-run afterwards, so the 20260830 file deliberately leaves
@@ -237,6 +244,35 @@ colour.
 Because computed curves are excluded by construction, the `simulated`,
 `refined`, and `difference` values of `curve_role` can never appear on a
 published curve, even though the column permits them.
+
+The paragraphs above describe the pilot. They no longer describe what is live.
+
+## Curve admission
+
+Since 2026-10-21 the site publishes every curve the paper releases — 11,445
+curves, 4,664 figures, 2,370 papers — instead of the 9,385 it published before,
+and each curve carries a per-curve flag in `pxrd_curves.admission` rather than
+being held back:
+
+| `admission` | Meaning | Curves |
+| --- | --- | ---: |
+| `clean` | the curve and every sibling passed the offline shape checks (`in_clean_set`) | 7,713 |
+| `axis_verified` | unflagged itself; a sibling was flagged; the 2-theta axis was cross-validated | 1,672 |
+| `shape_flagged` | this curve's own trace failed the offline shape checks | 1,339 |
+| `axis_unconfirmed` | unflagged itself; a sibling was flagged; the axis was not cross-validated by two methods | 517 |
+| `model_derived` | a label audit after extraction found a simulated, refined or difference trace | 204 |
+
+`scripts/site_admission.py` maps the local `curves.admission` /
+`admission_reason` columns onto these values and is the only place the mapping
+is written; the importer, the exporter and both backfills import it, and they
+refuse a database carrying a pair it does not map. `in_clean_set` is unchanged
+— still the frozen 7,713-curve clean set — and still equals
+`admission = 'clean'`. With nothing withheld, `series_omitted_computed` and
+`series_excluded_quality` are 0 on every figure after a re-import, and
+`model_derived` curves can carry the `simulated`, `refined` or `difference`
+role. The 2,060 newly published curves have no crystallinity descriptors
+(`stacking_hump_status = 'not_computed'`): `tools/descriptors.py` has not been
+run over them.
 
 ## First peak and d-spacing
 

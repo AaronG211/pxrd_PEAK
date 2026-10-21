@@ -24,36 +24,43 @@ export type CurveRole =
  * 'flagged', and 'pending' is silent.
  */
 /**
- * How a curve earned its place in the corpus.
+ * Which class a published curve is in. The site publishes every curve the paper
+ * releases — all 11,445 accepted curves — and labels each one, rather than
+ * holding the non-clean ones back. scripts/site_admission.py maps the local
+ * database onto these values.
  *
  * `clean` is the original definition: the curve passed the offline shape filter
  * AND no other curve in its figure was flagged. That second half is figure-level
  * and deliberately blunt — the shape filter cannot see a misread 2θ axis, and
  * every trace in a panel shares one axis, so a flagged neighbour is treated as
- * evidence against the whole panel.
+ * evidence against the whole panel. It is the strict tier the project's offline
+ * analyses are computed over (in_clean_set, 7,713 curves).
  *
  * `axis_verified` is a curve that rule excluded as collateral: unflagged and
  * experimental in its own right, in a figure whose 2θ axis was fit twice — from
- * tick marks and from OCR of the labels — and agreed. That agreement is a direct
- * measurement of the risk the figure-level rule was estimating.
+ * tick marks and from OCR of the labels — and agreed. Not a quality ranking:
+ * 100% of them sit in a cross-validated figure against 82.6% of `clean` ones.
  *
- * Not a quality ranking, and the asymmetry runs the other way: 100% of
- * `axis_verified` curves sit in a cross-validated figure against 82.6% of
- * `clean` ones. What is true of them and not of a clean curve is that a sibling
- * trace in the same panel failed a shape check — which is why they are labelled
- * per curve rather than merged in silently.
+ * `axis_unconfirmed` is the same situation without that agreement: unflagged
+ * itself, a sibling flagged, and the figure's axis fit by one method or by two
+ * that disagreed. 1,303 `clean` curves sit on axes with the same provenance,
+ * which is why withholding these 517 was inconsistent and they are now
+ * published and labelled instead.
  *
- * KNOWN INCONSISTENCY, recorded here because this is where someone will look.
- * The cross-validated-axis requirement was imposed on the re-admitted set only;
- * `clean` never had to meet it. 1,303 published `clean` curves sit on axes that
- * were fit by one method, or fit by two that disagreed and went to arbitration.
- * 517 curves were nevertheless excluded for exactly that axis provenance, their
- * only other mark being a flagged sibling. So the same evidence admits a curve
- * or rejects it depending on which side of the re-admission it fell. Widening
- * the rule, not narrowing `clean`, is the fix — the paper publishes all 11,445
- * accepted curves and discloses their flags.
+ * `shape_flagged` is a curve whose own trace failed the offline shape checks (a
+ * staircase or notch in the trace, or a trace that did not stay on the printed
+ * line). The paper publishes these with the flag disclosed; so does the site.
+ *
+ * `model_derived` is a trace that a label audit after extraction identified as
+ * simulated, Pawley/Rietveld-refined or a difference curve — one that slipped
+ * past the keyword filter that keeps such traces out. Not a measured pattern.
  */
-export type CurveAdmission = "clean" | "axis_verified";
+export type CurveAdmission =
+  | "clean"
+  | "axis_verified"
+  | "shape_flagged"
+  | "axis_unconfirmed"
+  | "model_derived";
 
 export type FigureQualityStatus = "pending" | "flagged";
 
@@ -87,9 +94,10 @@ export type FirstPeakStatus =
  *
  * This used to be `assumed_cu_ka` on every published curve that has a first peak
  * at all, because the single paper in the 2,370-paper corpus that reports a
- * machine-readable wavelength had no curve in the clean set. Six of its curves
- * were re-admitted (see {@link CurveAdmission}), so `paper_reported` is now a
- * value that actually occurs — on those six rows and nowhere else.
+ * machine-readable wavelength had no curve in the clean set. Its curves reached
+ * the site through the non-clean classes (see {@link CurveAdmission}), so
+ * `paper_reported` is now a value that actually occurs — on that paper's rows
+ * (10 since every accepted curve is published) and nowhere else.
  *
  * The value was carried per row from the start precisely so this could change
  * without any UI sentence needing to be true about the whole collection. Keep
@@ -213,16 +221,19 @@ export interface PxrdFigure {
   seriesDetected: number | null;
   seriesDigitized: number | null;
   /**
-   * Computed traces (simulated / Pawley-refined / difference) on this figure,
-   * excluded by policy. Until the admission migration and a re-import have run
-   * this carries every non-clean curve, not just computed ones — which is why
-   * the UI must not describe it as "not digitized".
+   * Computed traces (simulated / Pawley-refined / difference) on this figure
+   * that were not published. Until the admission migration and a re-import have
+   * run this carries every non-clean curve, not just computed ones — which is
+   * why the UI must not describe it as "not digitized". Since every accepted
+   * curve is published (2026-10-21) it is 0 after a re-import; such a trace is
+   * now a curve on the page, marked `model_derived`.
    */
   seriesOmittedComputed: number | null;
   /**
-   * Curves on this figure excluded by measurement rather than policy: they
-   * failed the offline shape filter, or the figure's axis was never
-   * cross-validated. Null until the admission migration and a re-import.
+   * Curves on this figure withheld for a measured reason: a failed shape check,
+   * or an axis never cross-validated. Null until the admission migration and a
+   * re-import; 0 after a re-import since 2026-10-21, because those curves are
+   * now published as `shape_flagged` and `axis_unconfirmed`.
    */
   seriesExcludedQuality: number | null;
   curves: PxrdCurve[];
@@ -240,13 +251,19 @@ export interface PaperSummary {
   curveCount: number;
   /**
    * Curves in the original clean set. Equals curveCount until the admission
-   * migration and a re-import have run. A paper where this is 0 is published
-   * and has a working page, but appears in the index only when re-admitted
-   * curves are included.
+   * migration and a re-import have run. A paper where this is 0 is published,
+   * listed by default and has a working page, but drops out of the index when
+   * it is restricted to clean curves.
    */
   cleanCurveCount: number;
   /** Figures still holding a clean curve. Equals figureCount pre-migration. */
   cleanFigureCount: number;
+  /**
+   * This paper's published curves per admission class. A class with no curves
+   * is absent rather than 0. Summed by the browse page to say what the
+   * non-clean part of the corpus is made of.
+   */
+  admissionCounts: Partial<Record<CurveAdmission, number>>;
   materialCount: number;
   materialNames: string[];
   curveRoles: CurveRole[];

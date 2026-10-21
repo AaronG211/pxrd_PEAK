@@ -7,17 +7,18 @@
  *
  * THE CENTRAL FACT THIS MODULE ENCODES: searching by d is searching by 2theta.
  * `first_peak_d_angstrom` is `lambda / (2 sin theta)` under a wavelength that is
- * ASSUMED for all but six of the published curves. Exactly one paper in the
- * 2,370-paper corpus reports a machine-readable wavelength; it had no clean-set
- * curve until curves.admission re-admitted six of them, and those six are the
- * only rows whose first_peak_wavelength_source reads 'paper_reported'
- * (1.54051 A, against the 1.5406 A assumed elsewhere). The other 9,379 are
- * still assumed, so the column carries no information the angle does not.
+ * ASSUMED for all but ten of the published curves. Exactly one paper in the
+ * 2,370-paper corpus reports a machine-readable wavelength; it has no clean-set
+ * curve, and its ten curves - six re-admitted, four shape-flagged, published
+ * since the site began carrying every accepted curve - are the only rows whose
+ * first_peak_wavelength_source reads 'paper_reported' (1.54051 A, against the
+ * 1.5406 A assumed elsewhere). The other 11,191 curves with a first peak are
+ * assumed, so the column carries no information the angle does not.
  *
  * The SEARCH is unaffected, and this is worth being precise about: a d entered
  * here is converted to 2theta once, under the assumed wavelength, and matched
  * against first_peak_two_theta_deg - which is measured, not derived. So those
- * six curves are still found at their true angle. What differs is the d shown
+ * ten curves are still found at their true angle. What differs is the d shown
  * on their rows, computed from their own wavelength rather than the search's.
  * Both sides are labelled with their own provenance, which is why this is a
  * disclosure rather than a defect, and why every surface that shows or accepts

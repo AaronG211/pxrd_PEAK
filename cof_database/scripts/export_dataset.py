@@ -2,20 +2,25 @@
 """Export the digitized PXRD corpus as a self-describing bulk download.
 
 The website offers data one figure at a time, which is fine for a reader and
-useless for anyone who wants the corpus: 4,275 separate downloads across 2,238
+useless for anyone who wants the corpus: 4,664 separate downloads across 2,370
 pages. This writes the whole thing as three flat tables and a README.
 
-WHAT IS IN IT. Every curve the pipeline accepted - all 11,445 - not just the
-9,385 the site currently publishes. Each row says which class it is in and why,
-so a recipient filters to whatever standard their task needs instead of
-inheriting the site's. That is also the paper's own posture: it releases the
-accepted set and discloses the flags rather than removing the flagged curves.
+WHAT IS IN IT. Every curve the pipeline accepted - all 11,445 - which since
+2026-10-21 is also exactly what the site publishes (it published 9,385 before).
+Each row carries the site's `admission` class - clean, axis_verified,
+shape_flagged, axis_unconfirmed or model_derived; see site_admission.py - so a
+recipient filters to whatever standard their task needs instead of inheriting
+one. That is the paper's own posture: it releases the accepted set and discloses
+the flags rather than removing the flagged curves.
 
-It deliberately includes the 204 model-derived traces the site omits. For a
-reader asking a structural question - stacking mode above all - the authors' own
-simulated AA/AB patterns plotted beside an experimental one are among the most
-informative curves in the corpus, and the site's reason for omitting them (it
-publishes measured patterns) is not a reason to withhold them from a dataset.
+It includes the 204 model_derived traces. For a reader asking a structural
+question - stacking mode above all - the authors' own simulated AA/AB patterns
+plotted beside an experimental one are among the most informative curves in the
+corpus. A reader who wants measured patterns only drops that class.
+
+The two scopes now hold the same rows. `published` is the public release.
+`accepted` adds the local admission_reason (which splits axis_unconfirmed into
+axis_single_method and axis_arbitrated) and published_on_site.
 
 WHAT IS NOT IN IT.
   * Figure images. The source crops are publisher pixels; see the site's
@@ -38,6 +43,14 @@ import json
 import sqlite3
 from collections import Counter
 from pathlib import Path
+
+# Sibling module; Python puts this script's directory on sys.path.
+from site_admission import (
+    SITE_ADMISSIONS,
+    published_predicate,
+    require_all_mapped,
+    site_admission,
+)
 
 CURVE_COLUMNS = [
     # identity
@@ -63,7 +76,9 @@ PAPER_COLUMNS = [
 ]
 
 
-# Columns that only mean something when unpublished curves are present.
+# Local bookkeeping the public release leaves out: admission_reason is the
+# pipeline's own reason string, already folded into `admission`, and
+# published_on_site is 1 on every row now that every accepted curve is published.
 ACCEPTED_ONLY_COLUMNS = {"admission_reason", "published_on_site"}
 
 
@@ -108,14 +123,14 @@ def main() -> int:
         "--scope",
         choices=["accepted", "published"],
         default="accepted",
-        help="accepted: every curve the pipeline accepted (11,445), labelled with why "
-        "it is or is not on the site. published: only what the website and API "
-        "serve — the scope of any public release.",
+        help="published: what the website and API serve - every accepted curve "
+        "(11,445) with its admission class - the scope of any public release. "
+        "accepted: the same rows plus the local admission_reason and "
+        "published_on_site columns.",
     )
     args = parser.parse_args()
     published_only = args.scope == "published"
     curve_columns = [c for c in CURVE_COLUMNS if not (published_only and c in ACCEPTED_ONLY_COLUMNS)]
-    scope_sql = "where c.admission in ('clean','axis_verified')" if published_only else ""
 
     root = args.assets_root.resolve() if args.assets_root else None
     if root is not None and not root.is_dir():
@@ -130,6 +145,9 @@ def main() -> int:
     curve_cols = {row[1] for row in conn.execute("PRAGMA table_info(curves)")}
     if "admission" not in curve_cols:
         raise SystemExit("curves.admission missing: run tools/admit_axis_verified.py --apply first")
+    # Same refusal as the importer: no curve leaves under a guessed label.
+    require_all_mapped(conn)
+    scope_sql = f"where {published_predicate(conn)}" if published_only else ""
 
     # ---- curves ------------------------------------------------------------
     rows = conn.execute("""
@@ -154,16 +172,19 @@ def main() -> int:
     def curve_rows():
         for r in rows:
             fid = r["figure_id"]
-            on_site = r["admission"] != "excluded"
+            # The site's label, from the one mapping the importer also uses.
+            admission = site_admission(r["admission"], r["admission_reason"])
+            on_site = admission is not None
             # Counted over published curves only, as the importer counts them;
             # counting the unpublished ones too would shift every later number.
             if on_site:
                 position[fid] += 1
             if fid not in calib_cache:
                 calib_cache[fid] = axis_calibration(root, r["paper_id"], fid)
-            tally[r["admission"]] += 1
+            tally[admission] += 1
             record = dict(r)
-            record["published_on_site"] = int(r["admission"] != "excluded")
+            record["admission"] = admission
+            record["published_on_site"] = int(on_site)
             record["axis_calibration"] = calib_cache[fid]
             for field in ("label", "material_name", "sample_state"):
                 record[field] = published_text(record.get(field))
@@ -212,7 +233,10 @@ def main() -> int:
         "exported_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "scope": args.scope,
         "papers": n_papers, "figures": n_figures, "curves": n_curves, "points": n_points,
-        "admission": dict(tally),
+        # Per site class, in the site's order, so the five numbers read the same
+        # way as /api/v1/stats.by_admission.
+        "admission": {name: tally[name] for name in SITE_ADMISSIONS},
+        "in_clean_set": sum(1 for r in rows if r["in_clean_set"] == 1),
         **({} if published_only else {"excluded_reasons": reasons}),
         "axis_calibration_by_figure": {str(k): v for k, v in calib.items()},
     }

@@ -69,7 +69,16 @@ if (statsResponse.status !== 200) {
 }
 const stats = statsResponse.body;
 check("stats has counts", stats.papers > 0 && stats.figures > 0 && stats.curves > 0, JSON.stringify(stats));
-check("admission classes sum to total", stats.by_admission.clean + stats.by_admission.axis_verified === stats.curves);
+// Every curve the paper releases is published, each in exactly one class. The
+// API counts each class on its own, so this sum is a real check: a row with a
+// value outside the five would make it fall short of the total.
+const ADMISSION_CLASSES = ["clean", "axis_verified", "shape_flagged", "axis_unconfirmed", "model_derived"];
+check("by_admission has exactly the five classes",
+  () => JSON.stringify(Object.keys(stats.by_admission).sort()) === JSON.stringify([...ADMISSION_CLASSES].sort()),
+  JSON.stringify(stats.by_admission));
+check("admission classes sum to total",
+  () => ADMISSION_CLASSES.reduce((n, a) => n + stats.by_admission[a], 0) === stats.curves,
+  JSON.stringify(stats.by_admission));
 
 // --- papers ----------------------------------------------------------------
 const papers = await call("papers", "limit=5");
@@ -122,6 +131,21 @@ check("curve window respected", window.body.data.every((c) =>
 
 const readmitted = await call("curves", "admission=axis_verified&limit=1");
 check("admission filter total == stats", readmitted.body.meta.total === stats.by_admission.axis_verified);
+// The classes published from 2026-10-21 — filter and /stats must agree on them
+// too, and on a corpus that has them the count must not be zero.
+for (const admission of ["shape_flagged", "axis_unconfirmed", "model_derived"]) {
+  const filtered = await call("curves", `admission=${admission}&limit=1`);
+  check(`admission=${admission} total == stats`,
+    () => filtered.body.meta.total === stats.by_admission[admission]
+      && filtered.body.data.every((c) => c.admission === admission),
+    `${filtered.body.meta?.total} vs ${stats.by_admission[admission]}`);
+}
+check("shape_flagged curves are published", stats.by_admission.shape_flagged > 0, JSON.stringify(stats.by_admission));
+const measured = await call("curves", "admission=clean,axis_verified,shape_flagged,axis_unconfirmed&limit=1");
+check("admission subset total == stats minus model_derived",
+  () => measured.body.meta.total === stats.curves - stats.by_admission.model_derived,
+  `${measured.body.meta?.total} vs ${stats.curves - stats.by_admission.model_derived}`);
+check("unknown admission rejected", (await call("curves", "admission=excluded")).status === 400);
 
 const byPaper = await call("curves", `paper_id=${somePaper.id}&limit=1000`);
 check("paper_id filter restricts", byPaper.body.data.length === somePaper.counts.curves
