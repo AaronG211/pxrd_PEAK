@@ -89,7 +89,9 @@ if (url && key) {
 
 const entries = [
   urlEntry("/", "1.0", "daily"),
-  urlEntry("/digitize", "0.3", "monthly"),
+  // /digitize is deliberately absent. The planner is unfinished and linked from
+  // nowhere public, and the page itself is noindex, so listing it here asked
+  // crawlers to visit a page that then told them not to index it.
   urlEntry("/docs/api", "0.5", "monthly"),
   // Paper pages are the corpus. They are the reason the sitemap exists.
   ...paperIds.map((id) => urlEntry(`/paper/${encodeURIComponent(id)}`, "0.8", "monthly")),

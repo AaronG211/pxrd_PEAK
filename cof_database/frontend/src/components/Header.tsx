@@ -1,24 +1,28 @@
-import { Code2, Database, LoaderCircle, LogIn, LogOut, X } from "lucide-react";
-import { Link, useLocation } from "react-router-dom";
+import { Code2, Database, LogOut, X } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useAuth } from "../auth/context";
 
+/**
+ * Site header.
+ *
+ * There is no "Digitize" link and no "Sign in" button. The digitization planner
+ * is unfinished, and sign-in exists only for it — nothing in the database or the
+ * API needs an account — so offering either in the primary navigation invited
+ * every visitor into a feature that is not ready. /digitize and /auth/callback
+ * still work for anyone with the direct URL (see App.tsx).
+ *
+ * The signed-in block stays, shown only when a session exists: the planner has
+ * no sign-out of its own, so someone who signed in through the direct URL must
+ * still be able to sign out from any page. A visitor with no session sees
+ * nothing here, not even the brief "checking sign-in" spinner.
+ */
 export function Header() {
-  const location = useLocation();
-  const {
-    user,
-    loading,
-    error,
-    isConfigured,
-    signInWithGoogle,
-    signOut,
-    clearError,
-  } = useAuth();
+  const { user, error, signOut, clearError } = useAuth();
   const metadata = user?.user_metadata as
     | { avatar_url?: string; picture?: string; full_name?: string; name?: string }
     | undefined;
   const avatarUrl = metadata?.avatar_url ?? metadata?.picture;
   const displayName = metadata?.full_name ?? metadata?.name ?? user?.email ?? "Researcher";
-  const returnTo = `${location.pathname}${location.search}${location.hash}`;
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-slate-200 bg-white/85 backdrop-blur-md">
@@ -35,12 +39,6 @@ export function Header() {
             className="text-sm font-medium text-slate-600 transition-colors hover:text-slate-900"
           >
             Browse
-          </Link>
-          <Link
-            to="/digitize"
-            className="text-sm font-medium text-slate-600 transition-colors hover:text-slate-900"
-          >
-            Digitize
           </Link>
           <Link
             to="/docs/api"
@@ -63,11 +61,7 @@ export function Header() {
           >
             <Code2 className="h-4 w-4" />
           </a>
-          {loading ? (
-            <span className="inline-flex h-9 w-9 items-center justify-center text-slate-500" aria-label="Checking sign-in status">
-              <LoaderCircle className="h-4 w-4 animate-spin" />
-            </span>
-          ) : user ? (
+          {user && (
             <div className="flex items-center gap-2 border-l border-slate-200 pl-2 sm:pl-4">
               {avatarUrl ? (
                 <img
@@ -94,17 +88,6 @@ export function Header() {
                 <span className="hidden xl:inline">Sign out</span>
               </button>
             </div>
-          ) : (
-            <button
-              type="button"
-              disabled={!isConfigured}
-              onClick={() => void signInWithGoogle(returnTo)}
-              className="inline-flex h-9 items-center gap-2 rounded-lg bg-slate-900 px-3 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-              title={isConfigured ? "Sign in with Google" : "Supabase is not configured"}
-            >
-              <LogIn className="h-4 w-4" />
-              <span className="hidden sm:inline">Sign in</span>
-            </button>
           )}
         </nav>
       </div>

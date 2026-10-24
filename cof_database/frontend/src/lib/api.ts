@@ -67,7 +67,6 @@ type DbFigure = {
   page_number: number | null;
   caption: string | null;
   crop_path: string;
-  digitized_plot_path: string;
   overlay_path: string | null;
   quality_status: PxrdFigure["qualityStatus"];
   sort_order: number;
@@ -377,7 +376,6 @@ function mapFigure(figure: DbFigure): PxrdFigure {
     pageNumber: figure.page_number,
     caption: figure.caption,
     sourceCropUrl: assetUrl(figure.crop_path),
-    digitizedPlotUrl: assetUrl(figure.digitized_plot_path),
     overlayUrl: figure.overlay_path ? assetUrl(figure.overlay_path) : null,
     qualityStatus: figure.quality_status,
     verificationStatus: figure.verification_status ?? null,
@@ -788,7 +786,7 @@ export async function fetchPaper(id: string): Promise<PaperDetail> {
       id, paper_number, doi, title, authors, journal, publication_year, source_url,
       ${withStatus ? `${PAPER_STATUS_COLUMNS},` : ""}
       pxrd_figures (
-        id, figure_label, page_number, caption, crop_path, digitized_plot_path,
+        id, figure_label, page_number, caption, crop_path,
         overlay_path, quality_status, sort_order,
         ${withVerification ? `${FIGURE_VERIFICATION_COLUMNS},` : ""}
         ${withExclusionSplit ? `${FIGURE_EXCLUSION_COLUMN},` : ""}

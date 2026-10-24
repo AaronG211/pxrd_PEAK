@@ -206,7 +206,12 @@ export interface PxrdFigure {
   pageNumber: number | null;
   caption: string | null;
   sourceCropUrl: string;
-  digitizedPlotUrl: string;
+  /*
+   * No digitized-plot URL. pxrd_figures.digitized_plot_path still exists and the
+   * importer still fills it, but it points at the pipeline's QA replot, which
+   * the paper page stopped showing: the interactive plot draws the same points.
+   * It is not selected, so no page can drift back to rendering it.
+   */
   overlayUrl: string | null;
   qualityStatus: FigureQualityStatus;
   /**

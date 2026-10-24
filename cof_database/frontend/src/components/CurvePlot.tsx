@@ -20,6 +20,9 @@ import {
   stepPrecision,
 } from "../lib/plotGeometry";
 import type { Domain, PlotPoint } from "../lib/plotGeometry";
+import { isExplicitRole } from "../lib/curveRole";
+import { styleSeries } from "../lib/seriesStyle";
+import type { SeriesStyle } from "../lib/seriesStyle";
 import type { CurveRole, FigureVerificationStatus } from "../types";
 
 export interface CurvePlotSeries {
@@ -41,56 +44,13 @@ export interface CurvePlotSeries {
   points: PlotPoint[];
 }
 
-/**
- * Stroke ramps stay inside the hue of the matching role badge in the inventory
- * table (see `roleStyles` in PaperDetailPage), so a plotted line is traceable to
- * its row.
- *
- * TWO shades per role, not four, and the number is forced by arithmetic rather
- * than taste. A stroke needs 3:1 against white to satisfy WCAG 1.4.11, which caps
- * its relative luminance at about 0.3; requiring three such shades to be mutually
- * 3:1 apart as well has no solution. Two do. The pairs below were selected by
- * computing WCAG 2.x relative luminance over the Tailwind palette:
- *
- *   role           mid      vs white   deep     vs white   mid vs deep
- *   experimental   #059669    3.77      #022C22   15.15        4.02
- *   simulated      #2563EB    5.17      #0C1B4A   16.52        3.20
- *   refined        #7F22FE    5.89      #21063D   18.13        3.08
- *   difference     #C2410C    5.18      #2A0C04   18.22        3.52
- *   reference      #62748E    4.76      #020617   20.17        4.23
- *   unclassified   #6B7280    4.83      #0C0A09   19.76        4.09
- *
- * The previous ramp asserted the same 3:1 property in a comment and did not have
- * it: #00BC7D was 2.47, #00A6F4 2.71 and #FE9A00 2.13 against white, and pairs
- * drawn on the SAME plot came as close as 1.22 (#0F172B vs #1D293D in the default
- * unclassified ramp). Those five values are gone. Re-check with a contrast
- * calculator before changing any hex here; do not re-assert the table.
+/*
+ * Stroke colours and dashes come from lib/seriesStyle, one hue per series in
+ * series order. They used to be a two-shade ramp per ROLE, matched to the role
+ * badges in the inventory; since nearly nine in ten multi-curve figures carry a
+ * single role across all their curves, that drew most of them in two shades of
+ * one hue told apart only by dash pattern.
  */
-const ROLE_RAMP: Record<CurveRole, [string, string]> = {
-  experimental: ["#059669", "#022C22"],
-  simulated: ["#2563EB", "#0C1B4A"],
-  refined: ["#7F22FE", "#21063D"],
-  difference: ["#C2410C", "#2A0C04"],
-  reference: ["#62748E", "#020617"],
-  unclassified: ["#6B7280", "#0C0A09"],
-};
-
-/**
- * Six patterns against two shades gives 12 unique (shade, pattern) pairs before
- * anything repeats. The largest figure in the published collection carries 11
- * curves, so no two traces on one plot can share both channels. The old code
- * advanced the dash only after a full lap of a four-entry ramp, which left the
- * first four series of a role solid and separable by hue alone — and the live
- * corpus is almost entirely one role, so that was the common case, not the edge.
- */
-const DASH_PATTERNS: Array<string | undefined> = [
-  undefined,
-  "8 4",
-  "2 3",
-  "12 3 2 3",
-  "4 3",
-  "12 3 2 3 2 3",
-];
 
 const GRID_COLOR = "#E2E8F0";
 const AXIS_COLOR = "#94A3B8";
@@ -105,21 +65,58 @@ const END_LABEL_GAP = 12;
 /** Discrete positions the readout slider offers across the visible window. */
 const READOUT_STEPS = 400;
 
-type SeriesStyle = { color: string; dash: string | undefined };
+/**
+ * Vertical room at the top of each offset-view lane that belongs to its label
+ * and never to its trace.
+ *
+ * Each trace is normalised so its tallest point reaches the top of its drawing
+ * area, and COF patterns put that point at low 2θ — the left end, exactly where
+ * the label sits. With the label drawn inside the trace's own area, its white
+ * halo cut 3,398 of the 9,357 curves in multi-curve figures off flat at their
+ * strongest peak at desktop width, and 5,896 at phone width (geometry over
+ * outputs/pxrd.db, 2026-10-24). The band holds the label's 10 px text and its
+ * 1.5 px halo, baseline at +12, with a pixel to spare above the trace stroke.
+ */
+const LANE_LABEL_BAND_PX = 18;
 
-function styleSeries(series: CurvePlotSeries[]): Map<string, SeriesStyle> {
-  const seenPerRole = new Map<CurveRole, number>();
-  const styles = new Map<string, SeriesStyle>();
-  for (const item of series) {
-    const ordinal = seenPerRole.get(item.role) ?? 0;
-    seenPerRole.set(item.role, ordinal + 1);
-    const ramp = ROLE_RAMP[item.role];
-    styles.set(item.seriesId, {
-      color: ramp[ordinal % ramp.length],
-      dash: DASH_PATTERNS[Math.floor(ordinal / ramp.length) % DASH_PATTERNS.length],
-    });
-  }
-  return styles;
+/** Gap between a lane's baseline and the label band of the lane below it. */
+const LANE_FOOT_PX = 3;
+
+/**
+ * Smallest lane the offset view draws before it grows the plot instead.
+ *
+ * The offset view is the default for any figure with more than one curve, and
+ * the published collection has figures of up to 23. Dividing a fixed 340 px
+ * among them left lanes of about 12 px — flat lines under overlapping labels.
+ * Below this height per lane the plot gets taller rather than the lanes thinner.
+ * Net of the label band and the foot, these leave a trace 33 px tall on a
+ * desktop and 25 px on a phone.
+ */
+const MIN_LANE_PX = 54;
+const MIN_LANE_PX_NARROW = 46;
+
+/**
+ * The line sample used wherever a series is named outside the plot — legend
+ * chips, readout rows, offset-view lane labels — so every place a reader matches
+ * a name to a line shows the SAME colour and the same dash as that line. A plain
+ * colour dot dropped the dash, which is the only thing telling apart two traces
+ * that share a hue in figures with more series than the palette has colours.
+ */
+function SeriesSwatch({ style, muted = false }: { style: SeriesStyle | undefined; muted?: boolean }) {
+  return (
+    <svg width="22" height="8" aria-hidden="true" className="shrink-0">
+      <line
+        x1="1"
+        y1="4"
+        x2="21"
+        y2="4"
+        stroke={muted ? "#CAD5E2" : (style?.color ?? LABEL_COLOR)}
+        strokeDasharray={style?.dash}
+        strokeWidth={2.5}
+        strokeLinecap="round"
+      />
+    </svg>
+  );
 }
 
 function seriesNumber(seriesId: string): string {
@@ -178,7 +175,15 @@ export function CurvePlot({
 
   const [width, setWidth] = useState(0);
   const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set<string>());
-  const [stacked, setStacked] = useState(false);
+  /**
+   * Offset by default whenever there is more than one trace. Published PXRD
+   * figures almost always stack their patterns, so the overlaid view was the one
+   * that did NOT look like the source crop above it, and with every trace on a
+   * shared axis the tallest one flattens the rest. A single trace has nothing to
+   * offset from and opens overlaid, with its intensity axis. Read once at mount:
+   * the section only mounts this component after the figure's data has loaded.
+   */
+  const [stacked, setStacked] = useState(() => series.length > 1);
   const [zoom, setZoom] = useState<Domain | null>(null);
   const [cursorX, setCursorX] = useState<number | null>(null);
   const [drag, setDrag] = useState<{ from: number; to: number } | null>(null);
@@ -220,7 +225,7 @@ export function CurvePlot({
     [series],
   );
 
-  const styles = useMemo(() => styleSeries(sorted), [sorted]);
+  const styles = useMemo(() => styleSeries(sorted.map((item) => item.seriesId)), [sorted]);
 
   const fullX = useMemo<Domain>(() => {
     let min = Infinity;
@@ -244,7 +249,6 @@ export function CurvePlot({
   );
 
   const isNarrow = width > 0 && width < 520;
-  const height = isNarrow ? 250 : 340;
   const margin = useMemo(
     () => ({
       top: 16,
@@ -254,6 +258,15 @@ export function CurvePlot({
     }),
     [isNarrow, stacked],
   );
+  const baseHeight = isNarrow ? 250 : 340;
+  const height = stacked
+    ? Math.max(
+        baseHeight,
+        margin.top
+          + margin.bottom
+          + visible.length * (isNarrow ? MIN_LANE_PX_NARROW : MIN_LANE_PX),
+      )
+    : baseHeight;
   const innerW = Math.max(1, width - margin.left - margin.right);
   const innerH = Math.max(1, height - margin.top - margin.bottom);
   const columns = Math.max(1, Math.round(innerW));
@@ -333,8 +346,11 @@ export function CurvePlot({
   const laneScale = useCallback(
     (laneIndex: number, value: number) => {
       const [low, high] = laneDomains[laneIndex] ?? [0, 1];
-      const baseline = margin.top + (laneIndex + 1) * laneHeight - laneHeight * 0.1;
-      const usable = laneHeight * 0.78;
+      // Fixed pixel offsets, not fractions of the lane: the label is a fixed
+      // size, so a fractional margin either wasted room on tall lanes or let the
+      // trace run up under the label on short ones.
+      const baseline = margin.top + (laneIndex + 1) * laneHeight - LANE_FOOT_PX;
+      const usable = Math.max(1, laneHeight - LANE_LABEL_BAND_PX - LANE_FOOT_PX);
       return baseline - ((value - low) / (high - low)) * usable;
     },
     [laneDomains, laneHeight, margin.top],
@@ -608,7 +624,9 @@ export function CurvePlot({
             // The visible word flips to name the CURRENT view, which is the right
             // sighted affordance. The accessible name must not flip with it, or a
             // screen reader hears "Overlaid, not pressed" and the name and the
-            // state describe two different modes.
+            // state describe two different modes. Pressed means offset, so on a
+            // multi-curve figure the button now opens pressed, because that is
+            // the default view.
             aria-label="Offset the traces vertically"
             className={`${CONTROL_CLASS} ${stacked ? "border-slate-400 bg-slate-100" : ""}`}
           >
@@ -751,35 +769,82 @@ export function CurvePlot({
                   />
                 );
               })}
-              {endLabels.map(({ seriesId, y }) => (
-                <text
-                  key={`end-${seriesId}`}
-                  x={margin.left + innerW - 3}
-                  y={y}
-                  textAnchor="end"
-                  fontSize={10}
-                  fontWeight={700}
-                  fill={styles.get(seriesId)?.color ?? LABEL_COLOR}
-                  stroke="#FFFFFF"
-                  strokeWidth={3}
-                  style={{ paintOrder: "stroke" }}
-                >
-                  {seriesNumber(seriesId)}
-                </text>
-              ))}
+              {/*
+                End labels, like the lane labels below, carry the series colour
+                on a short line sample and print the number in dark text. Three
+                of the five palette hues sit between 3:1 and 4.5:1 against white:
+                enough for a 1.75 px stroke, short of what 10 px text needs. The
+                sample sits at the right edge, where the trace it names ends.
+              */}
+              {endLabels.map(({ seriesId, y }) => {
+                const style = styles.get(seriesId);
+                const right = margin.left + innerW - 2;
+                return (
+                  <g key={`end-${seriesId}`}>
+                    <line
+                      x1={right - 12}
+                      x2={right}
+                      y1={y - 3.5}
+                      y2={y - 3.5}
+                      stroke={style?.color ?? LABEL_COLOR}
+                      strokeDasharray={style?.dash}
+                      strokeWidth={2.5}
+                      strokeLinecap="round"
+                    />
+                    <text
+                      x={right - 16}
+                      y={y}
+                      textAnchor="end"
+                      fontSize={10}
+                      fontWeight={700}
+                      fill={TITLE_COLOR}
+                      stroke="#FFFFFF"
+                      strokeWidth={3}
+                      style={{ paintOrder: "stroke" }}
+                    >
+                      {seriesNumber(seriesId)}
+                    </text>
+                  </g>
+                );
+              })}
+              {/*
+                Lane labels sit in a band of their own at the top of each lane
+                (LANE_LABEL_BAND_PX), which no trace enters, so a label never
+                hides a peak. The colour is on the line sample, not the text,
+                for the contrast reason above; the halo is only for the
+                vertical grid lines, which do cross the band.
+              */}
               {stacked
-                && drawn.map(({ item }, laneIndex) => (
-                  <text
-                    key={`lane-${item.seriesId}`}
-                    x={margin.left + 6}
-                    y={margin.top + laneIndex * laneHeight + 12}
-                    fontSize={10}
-                    fontWeight={600}
-                    fill={styles.get(item.seriesId)?.color ?? LABEL_COLOR}
-                  >
-                    {seriesNumber(item.seriesId)} {item.label}
-                  </text>
-                ))}
+                && drawn.map(({ item }, laneIndex) => {
+                  const style = styles.get(item.seriesId);
+                  const baseline = margin.top + laneIndex * laneHeight + 12;
+                  return (
+                    <g key={`lane-${item.seriesId}`}>
+                      <line
+                        x1={margin.left + 6}
+                        x2={margin.left + 22}
+                        y1={baseline - 3.5}
+                        y2={baseline - 3.5}
+                        stroke={style?.color ?? LABEL_COLOR}
+                        strokeDasharray={style?.dash}
+                        strokeWidth={2.5}
+                        strokeLinecap="round"
+                      />
+                      <text
+                        x={margin.left + 27}
+                        y={baseline}
+                        fontSize={10}
+                        fontWeight={600}
+                        fill={TITLE_COLOR}
+                        stroke="#FFFFFF"
+                        strokeWidth={3}
+                        style={{ paintOrder: "stroke" }}
+                      >
+                        {seriesNumber(item.seriesId)} {item.label}
+                      </text>
+                    </g>
+                  );
+                })}
               {dragRect && (
                 <rect
                   x={dragRect.x}
@@ -932,11 +997,7 @@ export function CurvePlot({
           <ul className="flex flex-wrap gap-x-5 gap-y-1">
             {readout.map(({ item, point }) => (
               <li key={`read-${item.seriesId}`} className="flex items-center gap-1.5">
-                <span
-                  aria-hidden="true"
-                  className="inline-block h-2.5 w-2.5 rounded-full"
-                  style={{ backgroundColor: styles.get(item.seriesId)?.color }}
-                />
+                <SeriesSwatch style={styles.get(item.seriesId)} />
                 <span className="font-mono text-[10px] text-slate-600">
                   {seriesNumber(item.seriesId)}
                 </span>{" "}
@@ -994,23 +1055,17 @@ export function CurvePlot({
                     : "border-slate-200 bg-slate-50 text-slate-500"
                 } ${isLastVisible ? "cursor-not-allowed opacity-70" : ""}`}
               >
-                <svg width="22" height="8" aria-hidden="true" className="shrink-0">
-                  <line
-                    x1="1"
-                    y1="4"
-                    x2="21"
-                    y2="4"
-                    stroke={shown ? style?.color : "#CAD5E2"}
-                    strokeDasharray={style?.dash}
-                    strokeWidth={2.5}
-                    strokeLinecap="round"
-                  />
-                </svg>
+                <SeriesSwatch style={style} muted={!shown} />
                 <span className="font-mono text-[10px] text-slate-600">
                   {seriesNumber(item.seriesId)}
                 </span>
                 <span className="max-w-[13rem] truncate font-semibold">{item.label}</span>
-                <span className="capitalize text-slate-500">{item.role}</span>
+                {/* Only a role that was recorded. `unclassified` means none
+                    was, and printed on half the chips in the collection it read
+                    as a classification failure. See lib/curveRole. */}
+                {isExplicitRole(item.role) && (
+                  <span className="capitalize text-slate-500">{item.role}</span>
+                )}
                 <span className="sr-only">
                   {isLastVisible
                     ? " — shown, and the only plotted curve, so it cannot be hidden"

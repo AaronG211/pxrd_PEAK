@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { useAuth } from "./auth/context";
 import { Header } from "./components/Header";
+import { SiteFooter } from "./components/SiteFooter";
 import { ApiDocsPage } from "./pages/ApiDocsPage";
 import { AuthCallbackPage } from "./pages/AuthCallbackPage";
 import { DigitizationPlannerPage } from "./pages/DigitizationPlannerPage";
@@ -23,6 +24,12 @@ function PaperDetailRoute() {
   return <PaperDetailPage key={paperId ?? "none"} />;
 }
 
+/**
+ * /digitize and /auth/callback stay routed but are linked from nowhere public.
+ * The digitization planner is unfinished, so the header no longer offers it or
+ * a sign-in that only it uses; anyone holding the direct URL still reaches a
+ * working page, and the code is kept for when it ships.
+ */
 function DigitizationRoute() {
   const { user } = useAuth();
   return <DigitizationPlannerPage key={user?.id ?? "anonymous"} />;
@@ -49,12 +56,7 @@ function App() {
         </Routes>
       </main>
 
-      <footer className="mt-auto border-t border-slate-200 bg-white py-10">
-        <div className="section-container flex flex-col gap-3 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
-          <p className="font-medium text-slate-700">Open PXRD Database</p>
-          <p>Traceable diffraction data for materials researchers.</p>
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   );
 }

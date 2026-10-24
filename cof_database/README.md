@@ -9,11 +9,12 @@ with reconstructed traces, and downloads the curve data.
 
 - Paper index with paper number, title, DOI, journal, and year
 - Search across paper metadata
-- Side-by-side source crop and digitized plot
+- Side-by-side source crop and trace overlay, with an interactive replot of the digitized curves
 - Per-figure curve inventory and CSV download
 - Supabase-ready public read model
-- Google sign-in through Supabase Auth
-- Authenticated private PDF uploads and digitization planning jobs
+- Citation, license and removal-request notice on every page
+- Google sign-in and private digitization planning (`/digitize`): built but hidden
+  from the public navigation until the processing worker exists
 - Local demo snapshot containing three real records from `pxrd_fetcher`
 
 The previous AI extraction screens are no longer part of the public product.
