@@ -7,7 +7,6 @@ import {
   FileImage,
   Link2,
   Maximize2,
-  ScanLine,
   TriangleAlert,
 } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
@@ -16,6 +15,9 @@ import type { CurvePlotSeries } from "../components/CurvePlot";
 import { PublicationStatusBadge, PublicationStatusBanner } from "../components/PublicationStatusBadge";
 import { NON_CLEAN_ADMISSIONS, admissionMark } from "../lib/admission";
 import { fetchPaper, getMaterialLabelIndex } from "../lib/api";
+import { DATASET_CREATOR, DATASET_DOI_URL, DATA_LICENSE_URL } from "../lib/citation";
+import { UNRECORDED_ROLE_LABEL, isExplicitRole } from "../lib/curveRole";
+import type { ExplicitCurveRole } from "../lib/curveRole";
 import { describeCurveDataError, fetchFigureCurves, isAbortError } from "../lib/curveData";
 import { EMPTY_MATERIAL_LABEL_INDEX, groupForLabel } from "../lib/materialGroups";
 import type { MaterialLabelGroup, MaterialLabelIndex } from "../lib/materialGroups";
@@ -23,7 +25,6 @@ import { WAVELENGTH_ASSUMPTION_LONG } from "../lib/peakSearch";
 import { usePageMeta } from "../hooks/usePageMeta";
 import type {
   CurveAdmission,
-  CurveRole,
   FigureVerificationStatus,
   FirstPeakStatus,
   PaperDetail,
@@ -32,13 +33,17 @@ import type {
   StackingHumpStatus,
 } from "../types";
 
-const roleStyles: Record<CurveRole, string> = {
+/**
+ * Chips for the roles the extraction can record. There is deliberately no entry
+ * for `unclassified`: it means no role was recorded, which is not a property of
+ * the trace, and it is never drawn as a chip (see lib/curveRole).
+ */
+const roleStyles: Record<ExplicitCurveRole, string> = {
   experimental: "border-emerald-200 bg-emerald-50 text-emerald-700",
   simulated: "border-sky-200 bg-sky-50 text-sky-700",
   refined: "border-violet-200 bg-violet-50 text-violet-700",
   difference: "border-amber-200 bg-amber-50 text-amber-700",
   reference: "border-slate-200 bg-slate-100 text-slate-700",
-  unclassified: "border-slate-200 bg-slate-50 text-slate-500",
 };
 
 /**
@@ -133,13 +138,16 @@ function FigureImage({
           <Maximize2 className="h-3.5 w-3.5" /> Full size
         </a>
       </figcaption>
+      {/* Two tiles to a row now rather than three, so the cap is set by the
+          wider tile: at 430 px a landscape crop hit the height limit long before
+          it filled the column. */}
       <a
         href={url}
         target="_blank"
         rel="noreferrer"
-        className="flex min-h-[320px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white p-2 transition hover:border-slate-300 md:min-h-[420px]"
+        className="flex min-h-[320px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white p-2 transition hover:border-slate-300 md:min-h-[440px]"
       >
-        <img src={url} alt={alt} className="max-h-[430px] w-full object-contain" loading="lazy" />
+        <img src={url} alt={alt} className="max-h-[600px] w-full object-contain" loading="lazy" />
       </a>
     </figure>
   );
@@ -520,7 +528,7 @@ function FigurePlotSection({
       {!csvUrl ? (
         <p className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
           No curve data file is attached to this figure, so there is nothing to plot. The
-          digitized trace image above is still available.
+          source imagery above is still available.
         </p>
       ) : error ? (
         <div
@@ -753,6 +761,10 @@ function FigureCard({
   // Column-presence flags, computed once and gating <th> and <td> as matched pairs.
   const showResidual = figure.curves.some((curve) => curve.twoThetaUncertaintyDeg !== null);
   const showFirstPeak = figure.curves.some((curve) => curve.firstPeakStatus !== null);
+  // A Type column of nothing but `unclassified` carried no information and
+  // read as a column of failures, so it exists only when a role was recorded
+  // for at least one of the figure's traces.
+  const showRole = figure.curves.some((curve) => isExplicitRole(curve.role));
   const disputed = axisIsDisputed(figure.verificationStatus);
   const assumedWavelength = figure.curves.some(
     (curve) => curve.firstPeakWavelengthSource === "assumed_cu_ka",
@@ -864,18 +876,22 @@ function FigureCard({
         </div>
       </div>
 
-      <div className={`grid gap-px bg-slate-200 ${figure.overlayUrl ? "lg:grid-cols-3" : "lg:grid-cols-2"}`}>
+      {/*
+        Two tiles: the printed figure and the extracted trace drawn over it.
+
+        A third tile, "Digitized traces", used to sit between them. It was the
+        pipeline's own QA replot (replot_qa.png), captioned with a debug title
+        such as "...-p003-f05 accepted conf=1.00" in type too small to read, and
+        it showed nothing the interactive pattern below does not show better:
+        the same points, without zoom, readout or legend. Its width now goes to
+        the two images a reader actually compares.
+      */}
+      <div className={`grid gap-px bg-slate-200 ${figure.overlayUrl ? "md:grid-cols-2" : ""}`}>
         <FigureImage
           url={figure.sourceCropUrl}
           alt={`Published source crop for ${figureName}`}
           label="Source figure crop"
           icon={<FileImage className="h-4 w-4" />}
-        />
-        <FigureImage
-          url={figure.digitizedPlotUrl}
-          alt={`Digitized traces for ${figureName}`}
-          label="Digitized traces"
-          icon={<ScanLine className="h-4 w-4" />}
         />
         {figure.overlayUrl && (
           <FigureImage
@@ -896,7 +912,7 @@ function FigureCard({
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-semibold text-slate-900">Curve inventory</h3>
           <span className="text-xs text-slate-500">
-            {figure.curves.length} curves · {totalPoints.toLocaleString()} points
+            {figure.curves.length} curve{figure.curves.length === 1 ? "" : "s"} · {totalPoints.toLocaleString()} points
           </span>
         </div>
         <div className="overflow-x-auto rounded-xl border border-slate-200">
@@ -905,7 +921,7 @@ function FigureCard({
               <tr>
                 <th scope="col" className="px-4 py-3">Series</th>
                 <th scope="col" className="px-4 py-3">Label</th>
-                <th scope="col" className="px-4 py-3">Type</th>
+                {showRole && <th scope="col" className="px-4 py-3">Type</th>}
                 <th scope="col" className="px-4 py-3">Material</th>
                 <th scope="col" className="px-4 py-3">2θ range</th>
                 {showFirstPeak && (
@@ -938,11 +954,25 @@ function FigureCard({
                       {curve.label}
                       <AdmissionMark admission={curve.admission} />
                     </td>
-                    <td className="px-4 py-3">
-                      <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${roleStyles[curve.role]}`}>
-                        {curve.role}
-                      </span>
-                    </td>
+                    {showRole && (
+                      <td className="px-4 py-3">
+                        {isExplicitRole(curve.role) ? (
+                          <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${roleStyles[curve.role]}`}>
+                            {curve.role}
+                          </span>
+                        ) : (
+                          // Beside recorded roles, a missing one is a dash
+                          // rather than a word, so the recorded roles stand out.
+                          // The wording says what is known — nothing was
+                          // recorded — not that the figure left it unsaid: the
+                          // label beside it often says exactly what it is.
+                          <span className="text-xs text-slate-500" title="No role recorded for this trace">
+                            <span aria-hidden="true">—</span>
+                            <span className="sr-only">{UNRECORDED_ROLE_LABEL}</span>
+                          </span>
+                        )}
+                      </td>
+                    )}
                     <td className="whitespace-nowrap px-4 py-3 text-slate-600">
                       {curve.materialName || "—"}
                       {group && <MaterialLabelLink group={group} />}
@@ -1079,11 +1109,17 @@ function FigureCard({
   );
 }
 
+const SITE_ORIGIN = "https://pxrd-peak.vercel.app";
+
 export function PaperDetailPage() {
   const { paperId } = useParams();
   const [paper, setPaper] = useState<PaperDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  // The production address, not window.location: a JSON-LD identifier has to
+  // be the same string on a preview deployment as on the live site.
+  const pageUrl = paperId ? `${SITE_ORIGIN}/paper/${encodeURIComponent(paperId)}` : undefined;
+  const doiUrl = paper?.doi ? `https://doi.org/${paper.doi}` : undefined;
   // null while the record is still resolving, so the previous title stays put
   // instead of flashing a placeholder. Falls back to the paper number when the
   // title itself is the one thing we could not resolve.
@@ -1120,21 +1156,45 @@ export function PaperDetailPage() {
             `${paper.curveCount} powder X-ray diffraction curves digitized from `
             + `${paper.figureCount} published figure(s), with the source crop preserved `
             + `beside each reconstructed trace.`,
-          identifier: paper.doi ? `https://doi.org/${paper.doi}` : undefined,
-          creator: paper.authors
-            ? paper.authors.split(",").map((name) => ({ "@type": "Person", name: name.trim() }))
-            : undefined,
+          // WHO MADE WHAT. This Dataset is the digitization — the extracted
+          // points and their metadata — so its identifier is this page, its
+          // creator is this project, and its license is the dataset's CC BY.
+          // The article and its authors appear only as the source, in
+          // isBasedOn and citation. The record used to carry the article's DOI
+          // as `identifier` and its authors as `creator`; with a license added
+          // beside those, it would have told Dataset Search that the article's
+          // authors had released their data under CC BY.
+          identifier: pageUrl,
+          url: pageUrl,
+          creator: { "@type": "Person", name: DATASET_CREATOR },
           keywords: [
             "powder X-ray diffraction",
             "PXRD",
             "XRD",
             ...paper.materialNames.slice(0, 12),
           ],
-          isBasedOn: paper.doi ? `https://doi.org/${paper.doi}` : undefined,
+          isBasedOn: doiUrl
+            ? {
+                "@type": "ScholarlyArticle",
+                "@id": doiUrl,
+                identifier: doiUrl,
+                name: paper.hasResolvedTitle ? paper.title : undefined,
+                author: paper.authors
+                  ? paper.authors.split(",").map((name) => ({ "@type": "Person", name: name.trim() }))
+                  : undefined,
+              }
+            : undefined,
+          // The site asks every reuser to cite the source paper as well.
+          citation: doiUrl,
+          // Covers the points and their metadata only. The source crop, the
+          // overlay and a quoted caption are the article's, and are not under
+          // this license (see lib/citation).
+          license: DATA_LICENSE_URL,
+          isPartOf: { "@type": "Dataset", "@id": DATASET_DOI_URL, url: DATASET_DOI_URL },
           includedInDataCatalog: {
             "@type": "DataCatalog",
             name: "Open PXRD Database",
-            url: "https://pxrd-peak.vercel.app/",
+            url: `${SITE_ORIGIN}/`,
           },
           distribution: paper.figures
             .flatMap((figure) => figure.curves.filter((curve) => curve.dataUrl).slice(0, 1))

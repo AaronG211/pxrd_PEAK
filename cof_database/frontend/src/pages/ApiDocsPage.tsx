@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { CitingAndLicense } from "../components/CitingAndLicense";
 import { getCorpusCounts } from "../lib/api";
 import { usePageMeta } from "../hooks/usePageMeta";
 
@@ -82,6 +83,7 @@ const ON_THIS_PAGE: Array<[string, string]> = [
   ["papers", "Searching papers"],
   ["pagination", "Pagination"],
   ["reading", "Reading the data correctly"],
+  ["citing", "Citing and license"],
   ["conventions", "Conventions"],
 ];
 
@@ -100,13 +102,13 @@ const ENDPOINTS: Array<[string, ReactNode]> = [
 const CURVE_FIELDS: Array<[string, ReactNode]> = [
   ["series_id", <>Stable id of the trace: <Mono>{"{figure_id}-s{NN}"}</Mono>.</>],
   ["paper_id", <>The paper&rsquo;s DOI with <Mono>/</Mono> replaced by <Mono>_</Mono>, so it can sit in a URL path.</>],
-  ["doi", "The paper's DOI — what to cite, and what doi.org resolves."],
+  ["doi", <>The source paper&rsquo;s DOI, which doi.org resolves. Cite the paper alongside the dataset; see <a className="font-medium text-blue-700 hover:underline" href="#citing">Citing and license</a>.</>],
   ["figure_id", <><Mono>{"{paper_id}-p{page}-f{n}"}</Mono>: the figure&rsquo;s page and position in the PDF.</>],
   ["label", "The trace's legend text in the figure."],
   ["material_name", "The material as the paper names it, not normalised."],
   ["material_group", <>The cross-paper label group, or <Mono>null</Mono>. See <a className="font-medium text-blue-700 hover:underline" href="#materials">Materials</a>.</>],
   ["sample_state", "As the paper describes it (as-synthesised, activated, after soaking…); often null."],
-  ["role", <>What the source said the trace was: <Mono>experimental</Mono> where it was labelled so, <Mono>reference</Mono> for a reference card (e.g. JCPDS), otherwise <Mono>unclassified</Mono> — about half the corpus.</>],
+  ["role", <>The role the extraction recorded: <Mono>experimental</Mono> where the recorded sample state says so; <Mono>simulated</Mono>, <Mono>refined</Mono>, <Mono>difference</Mono> or <Mono>reference</Mono> where the legend label names one (e.g. Pawley, JCPDS); otherwise <Mono>unclassified</Mono>, meaning none was recorded — about half the corpus, and not a sign that the figure left the role unsaid.</>],
   ["admission", <>Which class the curve is in: <Mono>clean</Mono>, <Mono>axis_verified</Mono>, <Mono>shape_flagged</Mono>, <Mono>axis_unconfirmed</Mono> or <Mono>model_derived</Mono>. Every accepted curve is published with its class; see <a className="font-medium text-blue-700 hover:underline" href="#reading">Reading the data</a>.</>],
   ["two_theta_min_deg, two_theta_max_deg", "The 2θ window this trace was plotted over."],
   ["point_count", "Number of digitized points."],
@@ -416,6 +418,13 @@ all_ok_curves = list(every(f"{BASE}/curves", first_peak_status="ok"))`}</Code>
               split puts near-duplicates on both sides.
             </li>
           </ul>
+        </Section>
+
+        {/* The same component as the About section, so the API's readers — the
+            ones most likely to reuse curves in bulk — get the identical citation
+            and license terms rather than a paraphrase. */}
+        <Section id="citing" title="Citing and license">
+          <CitingAndLicense />
         </Section>
 
         <Section id="conventions" title="Conventions">

@@ -33,6 +33,21 @@ import { gunzipSync } from "node:zlib";
 
 const VERSION = "1";
 const SITE = "https://pxrd-peak.vercel.app";
+
+/*
+ * License and citation terms for the index response. A copy of
+ * src/lib/citation.ts, which the website's footer, About section and API docs
+ * read: this function is compiled under its own tsconfig and bundled on its
+ * own, so it cannot import from src/. Change both together.
+ */
+const DATASET_DOI_URL = "https://doi.org/10.5281/zenodo.23539381";
+const CODE_DOI_URL = "https://doi.org/10.5281/zenodo.23540144";
+const DATA_LICENSE_URL = "https://creativecommons.org/licenses/by/4.0/";
+const CODE_LICENSE_URL = "https://github.com/AaronG211/pxrd_PEAK/blob/main/LICENSE";
+const SOURCE_MATERIAL_NOTICE =
+  "Source figure crops, trace overlays and quoted figure captions are reproduced only so "
+  + "that each trace can be checked against its source; they remain under their original "
+  + "copyright (the publisher's or the authors') and are not covered by either license.";
 const BUCKET = "pxrd-assets";
 
 /** Every ID in the corpus matches this; anything else cannot exist. */
@@ -482,6 +497,21 @@ function index() {
       + `${SITE}/api/v1/stats. No key required. Responses are cached for up to an hour.`,
     bulk_download: "https://github.com/AaronG211/pxrd_PEAK/releases",
     documentation: `${SITE}/docs/api`,
+    // The bulk reusers this index serves are the readers who most need the
+    // terms, and the only ones who may never open a page with the footer on it.
+    license: {
+      data: "CC BY 4.0",
+      data_url: DATA_LICENSE_URL,
+      code: "MIT",
+      code_url: CODE_LICENSE_URL,
+      not_covered: SOURCE_MATERIAL_NOTICE,
+    },
+    citation: {
+      dataset: DATASET_DOI_URL,
+      code: CODE_DOI_URL,
+      source_papers: "Cite the source paper of every curve you use as well; its DOI is the doi field of each record.",
+      details: `${SITE}/docs/api#citing`,
+    },
     endpoints: [
       { path: "/api/v1/stats", description: "Corpus counts." },
       { path: "/api/v1/papers", description: "List and search papers.", example: `${SITE}/api/v1/papers?q=triazine&limit=5` },
@@ -504,8 +534,9 @@ function index() {
       "Traces the figure labels as simulated, refined or difference curves were filtered out during extraction. The few "
         + "that slipped past are published as admission=model_derived; to keep measured patterns only, leave that class out "
         + "(admission=clean,axis_verified,shape_flagged,axis_unconfirmed).",
-      "role records what the source said: 'experimental' where labelled so, 'reference' for reference cards, "
-        + "'unclassified' for about half of all curves.",
+      "role is the role the extraction recorded: 'experimental' where the recorded sample state says so, "
+        + "'simulated', 'refined', 'difference' or 'reference' where the legend label names one, and 'unclassified' "
+        + "(about half of all curves) where none was recorded, which does not mean the figure left it unsaid.",
       "Material groups are label agreement between papers, not verified material identity.",
     ],
   };
