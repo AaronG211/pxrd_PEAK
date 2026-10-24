@@ -23,6 +23,8 @@ SOFTWARE.
 The code in this repository is MIT-licensed. The digitized dataset distributed
 through the GitHub releases, the website and the API (curves, points and their
 metadata) is licensed separately under CC BY 4.0
-(https://creativecommons.org/licenses/by/4.0/). Source figures shown on the
-website remain the property of their publishers and are not covered by either
-license.
+(https://creativecommons.org/licenses/by/4.0/). Source figure crops, trace
+overlays and quoted figure captions shown on the website are reproduced only so
+that each trace can be checked against its source; they remain under their
+original copyright (the publisher's or the authors') and are not covered by
+either license.

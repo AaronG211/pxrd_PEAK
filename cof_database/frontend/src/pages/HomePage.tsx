@@ -45,6 +45,8 @@ import type {
 import { isPublisherNotice, publicationStatusLabel } from "../lib/publicationStatus";
 import type { CurveAdmission, CurveRole, PaperSummary } from "../types";
 import { ADMISSION_MARKS, NON_CLEAN_ADMISSIONS } from "../lib/admission";
+import { UNRECORDED_ROLE_LABEL } from "../lib/curveRole";
+import { CitingAndLicense } from "../components/CitingAndLicense";
 import { useEffect } from "react";
 import { usePageMeta, SITE_TITLE } from "../hooks/usePageMeta";
 
@@ -58,7 +60,10 @@ const ROLE_OPTIONS: Array<{ value: "all" | CurveRole | "exp-model"; label: strin
   { value: "simulated", label: "Simulated" },
   { value: "refined", label: "Refined" },
   { value: "reference", label: "Reference" },
-  { value: "unclassified", label: "Unclassified" },
+  // The value stays `unclassified` — it is what the API and the bulk files say —
+  // but the label says only what is known: no role was recorded for the curve.
+  // That is not the same as the figure leaving it unsaid; see lib/curveRole.
+  { value: "unclassified", label: UNRECORDED_ROLE_LABEL },
   { value: "exp-model", label: "Experimental + model" },
 ];
 
@@ -1014,10 +1019,11 @@ export function HomePage() {
                         {nonCleanOnlyPaperCount.toLocaleString()}{" "}
                         {nonCleanOnlyPaperCount === 1 ? "paper has" : "papers have"} no clean curve).{" "}
                         <span className="text-slate-500">
-                          On by default: the site publishes every curve the paper
-                          releases, and each paper page marks these curves and says
-                          why in one line. Unchecking narrows the index to the strict
-                          clean set — the tier this project&rsquo;s offline analyses
+                          On by default: the site publishes every curve the
+                          extraction accepted, and each paper page marks these
+                          curves and says why in one line. Unchecking narrows the
+                          index to the strict clean set — the tier this
+                          project&rsquo;s offline analyses
                           are computed over — and drops those papers from it.
                           Re-admitted and axis-unconfirmed curves passed the shape
                           checks themselves but share a figure with one that did
@@ -1413,8 +1419,9 @@ export function HomePage() {
                   Visually auditable
                 </dt>
                 <dd className="mt-1 text-sm leading-relaxed text-slate-600">
-                  The published crop sits beside the reconstructed trace and their
-                  overlay, so a reader can judge the fit against the ink.
+                  The published crop sits beside an overlay of the extracted trace on
+                  that same figure, above an interactive replot of the data, so a
+                  reader can judge the fit against the ink.
                 </dd>
               </div>
               <div>
@@ -1423,11 +1430,16 @@ export function HomePage() {
                   Downloadable
                 </dt>
                 <dd className="mt-1 text-sm leading-relaxed text-slate-600">
-                  Exact 2θ / intensity data per figure, for analysis, benchmarking
-                  and method development.
+                  Digitized 2θ / intensity data per figure, for analysis,
+                  benchmarking and method development.
                 </dd>
               </div>
             </dl>
+            {/* The same facts as the footer, in full: this is where a first-time
+                reader looks for "can I use this, and how do I cite it". */}
+            <div className="mt-8 border-t border-slate-200 pt-6">
+              <CitingAndLicense />
+            </div>
           </div>
         </div>
       </section>
