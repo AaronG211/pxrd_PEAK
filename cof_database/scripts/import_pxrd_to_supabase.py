@@ -46,6 +46,19 @@ Supabase value while a hardcoded None would overwrite it. Every gate is
 TABLE-level, never row-level: PostgREST builds one column list per bulk insert
 and rejects a batch whose objects have differing key sets (PGRST102), so a key
 added under a per-row condition would fail up to 300 rows at once.
+
+Image rule: the pipeline's crop often caught the first caption line below the
+plot or the journal's running header above it. With --trim, figure_trim.py
+finds those strips from the plot frame drawn in overlay.png, and source.webp
+and overlay.webp are published at the same reduced box. Trimming is opt-in
+because it has been checked only on a local pool of 279 figures, not on the
+stored corpus; without --trim both images are the crop as it is on disk. The
+page shows the two side by side, so they must never be published at different
+boxes: whenever one of them is encoded the other is re-encoded with it, and
+--trim is refused without --upload-overlays, which is the only way this run
+can rewrite a live overlay.webp. Existing Storage objects are never
+re-encoded unless --force-assets is passed, so trimming reaches figures
+already live only through a --trim --force-assets --upload-overlays run.
 """
 
 from __future__ import annotations
@@ -74,6 +87,7 @@ from PIL import Image
 
 # Sibling module in this directory; Python puts the script's own directory on
 # sys.path, so this works however the script is invoked.
+from figure_trim import trim_for_files
 from material_labels import build_groups
 from site_admission import (
     SITE_ADMISSIONS,
@@ -315,6 +329,11 @@ class Supabase:
                 **self.headers,
                 "Content-Type": content_type,
                 "x-upsert": "true",
+                # Served back as "cache-control: public, 31536000" (checked
+                # 2026-10-24): no max-age=, so browsers fall back to heuristic
+                # freshness rather than one year. Either way an object
+                # overwritten here can stay cached in browsers; see
+                # IMAGE_ASSET_VERSION in frontend/src/lib/api.ts.
                 "Cache-Control": "31536000",
             },
             timeout=(15, 180),
@@ -1271,8 +1290,13 @@ def webp_bytes(
     method: int = WEBP_METHOD,
     max_width: int | None = None,
     quality: int | None = None,
+    box: tuple[int, int, int, int] | None = None,
 ) -> bytes:
     """WebP for one asset. Lossless and full-size unless bounded.
+
+    `box` is a PIL crop box applied before anything else, so the width bound
+    is taken of the trimmed image. figure_trim only ever removes rows, so a
+    trimmed thumbnail keeps the width, and the scale, of an untrimmed one.
 
     `method` trades encode time for size, never quality. method=4, not the
     encoder default of 0: measured over the pilot, crop.png encodes to 305 KB at
@@ -1304,6 +1328,8 @@ def webp_bytes(
     """
     with Image.open(path) as image:
         image.load()
+        if box is not None and box != (0, 0, image.width, image.height):
+            image = image.crop(box)
         if max_width is not None and image.width > max_width:
             height = round(image.height * max_width / image.width)
             image = image.resize((max_width, height), Image.LANCZOS)
@@ -1379,6 +1405,8 @@ def upload_figure(
     figure: FigureRef,
     force_assets: bool,
     include_overlays: bool = False,
+    trim: bool = False,
+    trim_top: bool = False,
 ) -> int:
     base = assets_root / figure.paper_id / figure.figure_id
     source = base / "crop.png"
@@ -1389,6 +1417,29 @@ def upload_figure(
     if include_overlays and not overlay.is_file():
         raise FileNotFoundError(f"Missing overlay.png under {base}")
 
+    # One box for both publisher images, computed at most once and only when
+    # one of them is actually about to be encoded: a resumed run that skips
+    # every existing object never reads overlay.png for it. A figure without
+    # a readable frame keeps its full crop (see figure_trim.py).
+    trim_box: list[tuple[int, int, int, int] | None] = []
+
+    def publisher_box() -> tuple[int, int, int, int] | None:
+        if not trim:
+            return None
+        if not trim_box:
+            box = trim_for_files(source, overlay).box
+            # Bottom-only by default. The full-corpus review (2026-10-24, 5
+            # disjoint samples of 60 plus every suspect cut) found no bottom
+            # cut that removed anything of the panel being shown, but 103 top
+            # cuts that removed the sliced bottom of the panel ABOVE (photo
+            # strips, axis lines, tick labels left orphaned): figure content,
+            # even if not this panel's. A running header left in place is the
+            # safe failure, so the top stays uncut unless --trim-top.
+            if box is not None and not trim_top:
+                box = (box[0], 0, box[2], box[3])
+            trim_box.append(box)
+        return trim_box[0]
+
     remote_base = f"papers/{figure.paper_id}/{figure.figure_id}"
     objects = [
         (
@@ -1397,6 +1448,7 @@ def upload_figure(
                 source,
                 max_width=PUBLISHER_ASSET_MAX_WIDTH,
                 quality=PUBLISHER_ASSET_QUALITY,
+                box=publisher_box(),
             ),
             "image/webp",
         ),
@@ -1411,13 +1463,27 @@ def upload_figure(
                     overlay,
                     max_width=PUBLISHER_ASSET_MAX_WIDTH,
                     quality=PUBLISHER_ASSET_QUALITY,
+                    box=publisher_box(),
                 ),
                 "image/webp",
             )
         )
+    pending = {
+        object_path
+        for object_path, _, _ in objects
+        if force_assets or not supabase.object_exists(object_path)
+    }
+    # source.webp and overlay.webp are shown side by side and must share one
+    # box. Skipping each existing object on its own let a resumed run encode
+    # one of the pair at this run's box next to the other at the box of an
+    # earlier run (the whole crop, or a different trim), so whenever either
+    # is going to be written, both are.
+    pair = {f"{remote_base}/source.webp", f"{remote_base}/overlay.webp"}
+    if include_overlays and pending & pair:
+        pending |= pair
     uploaded_bytes = 0
     for object_path, build, content_type in objects:
-        if not force_assets and supabase.object_exists(object_path):
+        if object_path not in pending:
             continue
         payload = build()
         supabase.upload(object_path, payload, content_type)
@@ -1429,7 +1495,10 @@ def upload_figure(
     # file already uploaded. figure_csv_gz is deterministic (gzip mtime=0), so a
     # rebuilt file whose MD5 equals the stored ETag is byte-identical and is
     # left alone; anything else is replaced. Images are not rebuilt this way:
-    # re-encoding is expensive and their source pixels do not change.
+    # re-encoding is expensive and their source pixels do not change. That
+    # includes the trim: a source.webp/overlay.webp pair already in Storage
+    # keeps the box it was uploaded with (before figure_trim, the whole crop)
+    # until a --force-assets run replaces it.
     return uploaded_bytes + refresh_figure_csv(supabase, db_path, figure, force_assets)
 
 
@@ -1665,7 +1734,46 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--force-assets", action="store_true")
+    # Storage objects are overwritten in place at fixed paths, so browsers that
+    # cached an image keep showing it; the frontend busts that cache with ?v=
+    # (IMAGE_ASSET_VERSION in frontend/src/lib/api.ts), which this script
+    # cannot see. Hence the reminder in both help texts below.
+    parser.add_argument(
+        "--force-assets",
+        action="store_true",
+        help=(
+            "Re-encode and overwrite the images (and re-upload the data "
+            "files) already in Storage. When this "
+            "changes image bytes, bump IMAGE_ASSET_VERSION in "
+            "frontend/src/lib/api.ts in the same rollout and deploy it after "
+            "the upload, or browsers keep the old images"
+        ),
+    )
+    parser.add_argument(
+        "--trim-top",
+        action="store_true",
+        help=(
+            "With --trim, also cut a running header above the plot. Off by "
+            "default: on the stored corpus the top cuts also removed the "
+            "sliced bottom of the panel above in 103 figures (see "
+            "upload_figure). Bottom cuts (caption lines) are always applied "
+            "with --trim."
+        ),
+    )
+    parser.add_argument(
+        "--trim",
+        action="store_true",
+        help=(
+            "Publish source.webp and overlay.webp without the caption line or "
+            "running header the crop caught (figure_trim.py). Off by default "
+            "until the trim has been checked on the stored corpus. Requires "
+            "--upload-overlays, so the two images are always written at one "
+            "box. Applies only to images this run encodes: figures already "
+            "live are re-encoded only with --force-assets, and that rollout "
+            "must also bump the frontend's IMAGE_ASSET_VERSION (see "
+            "--force-assets)"
+        ),
+    )
     parser.add_argument(
         "--data-files-only",
         action="store_true",
@@ -1714,6 +1822,16 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    # A trimmed source.webp next to an untrimmed live overlay.webp would put
+    # two different crops side by side on the figure page. Only a run that
+    # also encodes overlay.webp can keep the pair at one box: under
+    # --force-assets every source.webp is rewritten, and on a resumed run a
+    # missing source.webp can sit next to a live overlay.webp.
+    if args.trim and not args.upload_overlays:
+        raise ValueError(
+            "--trim requires --upload-overlays: source.webp and overlay.webp "
+            "are shown side by side and must be published at the same box."
+        )
     load_env_file(
         Path(__file__).resolve().parents[1] / ".env",
         allowed_keys={"SUPABASE_URL", "SUPABASE_SECRET_KEY"},
@@ -1875,6 +1993,8 @@ def main() -> int:
                 figure,
                 args.force_assets,
                 args.upload_overlays,
+                args.trim,
+                args.trim_top,
             ): figure
             for figure in figure_refs
         }
