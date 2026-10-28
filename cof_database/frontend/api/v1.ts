@@ -315,6 +315,13 @@ async function count(table: string, filters: Record<string, string> = {}): Promi
   return total ?? 0;
 }
 
+/*
+ * Used only for curves.csv.gz (the /data proxy and the figure-data redirect),
+ * which stays unversioned: the redirect target is part of the public contract.
+ * This API publishes no image URL. If it ever does, append the `?v=` that
+ * IMAGE_ASSET_VERSION in src/lib/api.ts sets for source.webp / overlay.webp,
+ * and bump the two together, or API clients will keep cached pre-trim images.
+ */
 function storageUrl(path: string): string {
   return `${config().url}/storage/v1/object/public/${BUCKET}/${path}`;
 }

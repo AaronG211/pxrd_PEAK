@@ -329,11 +329,34 @@ async function fetchAllCurveFacets(): Promise<DbCurveFacet[]> {
   return rows;
 }
 
-function assetUrl(path: string | null): string {
+/**
+ * Version of the figure images (source.webp, overlay.webp) in Storage, sent as
+ * `?v=` on their URLs. BUMP IT in the same rollout as every importer run with
+ * --force-assets that changes image bytes (e.g. --trim): the importer
+ * overwrites those objects in place at fixed paths, and a browser that cached
+ * the old URL keeps showing the old image, possibly one tile of the pair and
+ * not the other. Deploy the bump AFTER the upload: a page served with the new
+ * value before the new bytes exist caches the old image under the new URL.
+ * Only the browser cache keys on the query string: the project's Smart CDN
+ * ignores it (on 2026-10-24 a never-requested `?v=` came back cf-cache-status
+ * HIT with the same bytes) and, per Supabase's docs, drops its edge copy of an
+ * object when the object is overwritten.
+ *
+ * Images only. curves.csv.gz is rewritten on a different trigger (whenever its
+ * content differs from the database, without --force-assets), so a version
+ * bumped by hand for images would not track it, and its URL is published as
+ * the dataset's contentUrl and by /api/v1, where it should stay canonical.
+ */
+const IMAGE_ASSET_VERSION = "2026-10-24t1";
+
+function assetUrl(path: string | null, version?: string): string {
   if (!path) return "";
+  // Absolute and demo paths are not Storage objects and are returned as given.
   if (/^(https?:)?\//.test(path)) return path;
   if (!supabase) return path;
-  return supabase.storage.from("pxrd-assets").getPublicUrl(path).data.publicUrl;
+  const url = supabase.storage.from("pxrd-assets").getPublicUrl(path).data.publicUrl;
+  if (!version) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}v=${encodeURIComponent(version)}`;
 }
 
 function mapCurve(curve: DbCurve): PxrdCurve {
@@ -375,8 +398,8 @@ function mapFigure(figure: DbFigure): PxrdFigure {
     figureLabel: figure.figure_label,
     pageNumber: figure.page_number,
     caption: figure.caption,
-    sourceCropUrl: assetUrl(figure.crop_path),
-    overlayUrl: figure.overlay_path ? assetUrl(figure.overlay_path) : null,
+    sourceCropUrl: assetUrl(figure.crop_path, IMAGE_ASSET_VERSION),
+    overlayUrl: figure.overlay_path ? assetUrl(figure.overlay_path, IMAGE_ASSET_VERSION) : null,
     qualityStatus: figure.quality_status,
     verificationStatus: figure.verification_status ?? null,
     axisAgreementDeg: numberOrNull(figure.axis_agreement_deg),
