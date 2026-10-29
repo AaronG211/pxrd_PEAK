@@ -36,6 +36,13 @@ MIN_PRECISION = 0.70
 MIN_RECALL = 0.60
 MIN_CONFIDENCE = 0.55
 
+# Repair-ladder snap windows, hoisted out of the inline `attempts` list so
+# fidelity_params() can reference them. Restating a constant in two places is
+# how a persisted "pin" ends up describing a value the code no longer uses.
+LADDER_WINDOW_COLOR = 0.045
+LADDER_WINDOW_FOREGROUND = 0.045
+LADDER_WINDOW_FOREGROUND_WIDE = 0.09
+
 
 def extract_series(
     plot_rgb: np.ndarray,
@@ -80,11 +87,12 @@ def extract_series(
     cmask = color_mask_for(plot_rgb, color)
     if cmask is not None:
         masked = np.logical_and(cmask, plot_mask.foreground)
-        attempts.append((f"color:{color}", masked, 0.045))
-    attempts.append(("foreground", plot_mask.foreground, 0.045))
-    attempts.append(("foreground-wide", plot_mask.foreground, 0.09))
+        attempts.append((f"color:{color}", masked, LADDER_WINDOW_COLOR))
+    attempts.append(("foreground", plot_mask.foreground, LADDER_WINDOW_FOREGROUND))
+    attempts.append(("foreground-wide", plot_mask.foreground,
+                     LADDER_WINDOW_FOREGROUND_WIDE))
 
-    best: Optional[Tuple[SnapTrace, object, str]] = None
+    best: Optional[Tuple[SnapTrace, object, str, float]] = None
     for round_idx, (name, mask, window) in enumerate(attempts):
         if not mask.any():
             continue
@@ -99,12 +107,12 @@ def extract_series(
         # rung had a higher composite score — otherwise the figure is rejected
         # on the failing rung while a passing result exists.
         if passes:
-            best = (trace, fidelity, name)
+            best = (trace, fidelity, name, window)
             evidence.repair_rounds = round_idx
             break
         score = trace.snap_rate * 0.4 + fidelity.precision * 0.4 + fidelity.recall * 0.2
         if best is None or score > _score_of(best):
-            best = (trace, fidelity, name)
+            best = (trace, fidelity, name, window)
             evidence.repair_rounds = round_idx
 
     if best is None:
@@ -112,11 +120,13 @@ def extract_series(
         result.reject_reason = "no usable pixel mask for tracing"
         return result, None
 
-    trace, fidelity, mask_name = best
+    trace, fidelity, mask_name, mask_window = best
     evidence.snap_rate = trace.snap_rate
     evidence.mean_snap_residual_px = trace.mean_residual_px
     evidence.pixel_precision = fidelity.precision
     evidence.pixel_recall = fidelity.recall
+    evidence.mask_rung = mask_name
+    evidence.window_frac = mask_window
     evidence.notes.append(f"mask={mask_name}")
 
     # Anchor-independent coverage, only meaningful on the series-specific
@@ -204,9 +214,37 @@ def extract_series(
     return result, trace.y_px
 
 
-def _score_of(best: Tuple[SnapTrace, object, str]) -> float:
-    trace, fidelity, _ = best
+def _score_of(best: Tuple[SnapTrace, object, str, float]) -> float:
+    trace, fidelity = best[0], best[1]
     return trace.snap_rate * 0.4 + fidelity.precision * 0.4 + fidelity.recall * 0.2
+
+
+def fidelity_params() -> dict:
+    """Every constant that changes a fidelity score, for persistence.
+
+    These live in code, so a later edit would silently change what an offline
+    replay reports. Recording them with each result makes the replay
+    self-describing instead of dependent on the checkout it runs from.
+
+    Every value is READ from the constant the code actually uses. An earlier
+    version restated them as literals here, which made the pin decorative: a
+    mutation changing vision.trace_fidelity's band_frac from 0.10 to 0.99 left
+    this function still reporting 0.10, and replay silently scored differently.
+    """
+
+    from .vision import FIDELITY_BAND_FRAC, FIDELITY_TOL_FRAC
+
+    return {
+        "min_snap_rate": MIN_SNAP_RATE,
+        "min_precision": MIN_PRECISION,
+        "min_recall": MIN_RECALL,
+        "min_confidence": MIN_CONFIDENCE,
+        "ladder_window_color": LADDER_WINDOW_COLOR,
+        "ladder_window_foreground": LADDER_WINDOW_FOREGROUND,
+        "ladder_window_foreground_wide": LADDER_WINDOW_FOREGROUND_WIDE,
+        "fidelity_band_frac": FIDELITY_BAND_FRAC,
+        "fidelity_tol_frac": FIDELITY_TOL_FRAC,
+    }
 
 
 def _anchor_deviation(
