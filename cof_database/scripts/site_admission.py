@@ -10,20 +10,25 @@ does, and says per curve which class it is in. The reason a curve was once
 held back travels with the curve instead of the curve being withheld.
 
     local admission, admission_reason      site admission      curves
-    clean          -                       clean                7,713
+    clean          -                       clean                7,558
     axis_verified  -                       axis_verified        1,672
     excluded       own_shape_flag          shape_flagged        1,339
     excluded       axis_single_method      axis_unconfirmed       435
     excluded       axis_arbitrated         axis_unconfirmed        82
+    excluded       axis_contradicted       axis_unconfirmed       155
     excluded       model_derived           model_derived          204
 
   clean             the curve and every other curve in its figure passed the
-                    offline shape checks. The frozen in_clean_set tier.
+                    offline shape checks. The in_clean_set tier.
   axis_verified     unflagged itself; a sibling in the panel was flagged, and
                     the figure's 2-theta axis was cross-validated by two fits.
   shape_flagged     this curve's own trace failed the offline shape checks.
   axis_unconfirmed  unflagged itself; a sibling in the panel was flagged, and
                     the figure's axis was NOT cross-validated by two methods.
+                    Since 2026-10-29 also every once-clean curve on the 124
+                    figures whose arbitrated axis the printed tick labels
+                    contradict (reason axis_contradicted; paper SI Section S3.5,
+                    tools/relabel_contradicted_axes.py in the research checkout).
   model_derived     a label audit after extraction says this trace is a
                     simulated, refined or difference curve that escaped the
                     keyword filter.
@@ -33,8 +38,10 @@ bulk exporter and both metadata backfills import it, so the curves the site
 publishes, the curves the release contains and the papers the backfills cover
 cannot disagree.
 
-in_clean_set is never redefined. It stays the 7,713-curve set the paper's
-validation section and outputs/analysis/*.json are computed over, and the
+in_clean_set is the set the paper's analyses and outputs/analysis/*.json are
+computed over. It was 7,713 curves until 2026-10-29, when the 155 clean curves
+on axis-contradicted figures left it (tools/relabel_contradicted_axes.py in the
+research checkout); it is now 7,558, and the paper was recomputed on it. The
 Supabase CHECK `in_clean_set = (admission = 'clean')` keeps holding because
 `clean` maps only to `clean`.
 
@@ -63,6 +70,7 @@ LOCAL_TO_SITE: dict[tuple[str, str | None], str] = {
     ("excluded", "own_shape_flag"): "shape_flagged",
     ("excluded", "axis_single_method"): "axis_unconfirmed",
     ("excluded", "axis_arbitrated"): "axis_unconfirmed",
+    ("excluded", "axis_contradicted"): "axis_unconfirmed",
     ("excluded", "model_derived"): "model_derived",
 }
 
@@ -123,7 +131,7 @@ def require_all_mapped(conn: sqlite3.Connection) -> None:
     Two checks. Every (admission, admission_reason) pair must be in
     LOCAL_TO_SITE, so nothing is published under a guessed label or dropped
     silently. And in_clean_set must agree with admission = 'clean', because the
-    Supabase CHECK requires it and because the 7,713-curve clean set is a number
+    Supabase CHECK requires it and because the clean set is a number
     the paper prints.
     """
     if not has_admission(conn):
@@ -152,6 +160,6 @@ def require_all_mapped(conn: sqlite3.Connection) -> None:
     if disagree:
         raise SystemExit(
             f"{disagree} curves disagree between admission='clean' and in_clean_set=1. "
-            "in_clean_set is the frozen clean set; refusing to publish a corpus "
+            "in_clean_set is the clean set; refusing to publish a corpus "
             "where the two readings differ."
         )
