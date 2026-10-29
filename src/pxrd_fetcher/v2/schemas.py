@@ -161,6 +161,15 @@ class TraceEvidence(BaseModel):
     mean_snap_residual_px: float = 0.0
     anchor_vs_final_rmsd_frac: float = 0.0
     repair_rounds: int = 0
+    # Which rung of the repair ladder won, recorded explicitly rather than left
+    # to be parsed out of `notes`. repair_rounds alone is NOT a substitute: it
+    # indexes `attempts`, whose length is 2 or 3 depending on whether
+    # color_mask_for returned None, so index 1 means "foreground" in one figure
+    # and "foreground-wide" in another. Choosing the wrong rung is not a
+    # rounding error — on one measured crop the three rungs gave precision
+    # 0.206 / 0.209 / 0.344 for the same anchor.
+    mask_rung: Optional[str] = None       # "color:<name>" | "foreground" | "foreground-wide"
+    window_frac: Optional[float] = None   # snap window used by the winning rung
     # Anchor-INDEPENDENT coverage, computed on the series-specific color mask
     # only (rung 1): every colored ink column counts, whether or not the
     # anchor went near it. Recorded, not gated — the anchor-banded recall

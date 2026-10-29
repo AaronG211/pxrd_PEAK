@@ -766,13 +766,20 @@ class FidelityScore:
     n_eval_cols: int
 
 
+# Fidelity tuning, hoisted so a persisted record can REFERENCE them rather than
+# restate them. A hand-copied duplicate drifts silently: a mutation changing
+# band_frac from 0.10 to 0.99 left a params dict of literals reporting 0.10.
+FIDELITY_BAND_FRAC = 0.10
+FIDELITY_TOL_FRAC = 0.02
+
+
 def trace_fidelity(
     y_px: np.ndarray,                 # per-column trace (plot coords), NaN allowed
     candidate_mask: np.ndarray,       # bool (h,w) candidate pixels for this series
     *,
     anchor_y: Optional[np.ndarray] = None,   # per-column anchor y (SnapTrace.anchor_y)
     tol_px: Optional[int] = None,
-    band_frac: float = 0.10,
+    band_frac: float = FIDELITY_BAND_FRAC,
 ) -> FidelityScore:
     """Compare the final trace against ORIGINAL figure pixels (not our own replot).
 
@@ -798,7 +805,7 @@ def trace_fidelity(
     """
 
     h, w = candidate_mask.shape
-    tol = tol_px if tol_px is not None else max(3, int(h * 0.02))
+    tol = tol_px if tol_px is not None else max(3, int(h * FIDELITY_TOL_FRAC))
     band = max(6, int(h * band_frac))
 
     ty = np.full(w, np.nan, dtype=float)
