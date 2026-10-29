@@ -36,8 +36,8 @@ Admission rule: every curve the paper releases is published - 11,445 since
 2026-10-21, up from 9,385 - and each carries its class in `admission`: clean,
 axis_verified, shape_flagged, axis_unconfirmed or model_derived. The mapping
 from the local curves.admission / admission_reason columns lives in
-site_admission.py and nowhere else. `in_clean_set` is still the frozen
-7,713-curve clean set and equals `admission = 'clean'`.
+site_admission.py and nowhere else. `in_clean_set` is the paper's
+clean set (7,558 curves since 2026-10-29) and equals `admission = 'clean'`.
 
 Column rule: every optional column is emitted only when the local SQLite
 column exists. The upsert uses resolution=merge-duplicates, which builds its
@@ -389,16 +389,26 @@ def deterministic_publishable_papers(conn: sqlite3.Connection, limit: int) -> li
     or model_derived. They are numbered PXRD-02239 onward; PXRD-00001 to
     PXRD-02238 name the same papers as before.
     """
+    # The clean set as it stood when cohorts 1 and 2 were numbered. On
+    # 2026-10-29 tools/relabel_contradicted_axes.py (research checkout) moved 155
+    # clean curves on axis-contradicted figures out of in_clean_set, marking them
+    # admission_reason = 'axis_contradicted'; 36 papers were left with no clean
+    # curve. Reading in_clean_set alone would drop those 36 from cohort 1 and
+    # renumber every later paper, so the cohorts read the clean set as it was.
+    numbered_clean = (
+        "(in_clean_set=1 or coalesce(admission_reason, '') = 'axis_contradicted')"
+        if has_admission(conn) else "in_clean_set=1"
+    )
     cohorts = [
         # Cohort 1: the original clean corpus. Its numbering predates admission
-        # and is reproduced exactly by keeping this query as it was.
-        "select distinct paper_id from curves where in_clean_set=1",
+        # and is reproduced exactly by reading the clean set as it was then.
+        f"select distinct paper_id from curves where {numbered_clean}",
         # Cohort 2: papers that reach the site only through a re-admitted curve.
         # The literal 'axis_verified' is the cohort's definition as of
         # 2026-09-10, kept verbatim so its numbering cannot move.
-        """
+        f"""
         select distinct paper_id from curves where admission='axis_verified'
-          and paper_id not in (select paper_id from curves where in_clean_set=1)
+          and paper_id not in (select paper_id from curves where {numbered_clean})
         """,
         # Cohort 3: every other paper with a published curve. The two cohorts
         # above are already in `seen`, so this adds only the papers reachable
@@ -1016,7 +1026,7 @@ def fetch_metadata(
             "data_path": f"papers/{paper_id}/{figure_id}/curves.csv.gz",
             # True only for the original corpus definition. Every other class
             # is published but is NOT in the clean set, and conflating them
-            # here would silently restate the paper's 7,713-curve figure.
+            # here would silently restate the paper's clean-set figure.
             "in_clean_set": admission == "clean",
             "admission": admission,
             # NULL means "not linked to any other paper by label". It never

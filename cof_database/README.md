@@ -257,18 +257,19 @@ being held back:
 
 | `admission` | Meaning | Curves |
 | --- | --- | ---: |
-| `clean` | the curve and every sibling passed the offline shape checks (`in_clean_set`) | 7,713 |
+| `clean` | the curve and every sibling passed the offline shape checks (`in_clean_set`) | 7,558 |
 | `axis_verified` | unflagged itself; a sibling was flagged; the 2-theta axis was cross-validated | 1,672 |
 | `shape_flagged` | this curve's own trace failed the offline shape checks | 1,339 |
-| `axis_unconfirmed` | unflagged itself; a sibling was flagged; the axis was not cross-validated by two methods | 517 |
+| `axis_unconfirmed` | unflagged itself; a sibling was flagged; the axis was not cross-validated by two methods; or the curve sits on one of the 124 figures whose arbitrated axis the printed tick labels contradict (paper SI Section S3.5) | 672 |
 | `model_derived` | a label audit after extraction found a simulated, refined or difference trace | 204 |
 
 `scripts/site_admission.py` maps the local `curves.admission` /
 `admission_reason` columns onto these values and is the only place the mapping
 is written; the importer, the exporter and both backfills import it, and they
-refuse a database carrying a pair it does not map. `in_clean_set` is unchanged
-— still the frozen 7,713-curve clean set — and still equals
-`admission = 'clean'`. With nothing withheld, `series_omitted_computed` and
+refuse a database carrying a pair it does not map. `in_clean_set` equals
+`admission = 'clean'`. It was the 7,713-curve clean set until 2026-10-29, when
+the 155 clean curves on axis-contradicted figures left it (local reason
+`axis_contradicted`; see `DEPLOY_NOTES_2026-10-29.md`); it is now 7,558. With nothing withheld, `series_omitted_computed` and
 `series_excluded_quality` are 0 on every figure after a re-import, and
 `model_derived` curves can carry the `simulated`, `refined` or `difference`
 role. The 2,060 newly published curves have no crystallinity descriptors

@@ -34,7 +34,7 @@ export type CurveRole =
  * and deliberately blunt — the shape filter cannot see a misread 2θ axis, and
  * every trace in a panel shares one axis, so a flagged neighbour is treated as
  * evidence against the whole panel. It is the strict tier the project's offline
- * analyses are computed over (in_clean_set, 7,713 curves).
+ * analyses are computed over (in_clean_set, 7,558 curves since 2026-10-29).
  *
  * `axis_verified` is a curve that rule excluded as collateral: unflagged and
  * experimental in its own right, in a figure whose 2θ axis was fit twice — from
@@ -45,7 +45,9 @@ export type CurveRole =
  * itself, a sibling flagged, and the figure's axis fit by one method or by two
  * that disagreed. 1,303 `clean` curves sit on axes with the same provenance,
  * which is why withholding these 517 was inconsistent and they are now
- * published and labelled instead.
+ * published and labelled instead. Since 2026-10-29 the class also holds the 155
+ * once-clean curves on figures whose arbitrated axis the printed tick labels
+ * contradict (672 in all).
  *
  * `shape_flagged` is a curve whose own trace failed the offline shape checks (a
  * staircase or notch in the trace, or a trace that did not stay on the printed
