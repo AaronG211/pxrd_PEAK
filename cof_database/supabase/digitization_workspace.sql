@@ -1,4 +1,4 @@
--- Open PXRD private digitization workspace (Phase A)
+-- COF-PEAK private digitization workspace (Phase A)
 --
 -- Run after schema.sql. This adds authenticated, user-owned draft jobs and
 -- private file storage. It deliberately does not add a worker, model key, or

@@ -1,4 +1,4 @@
-"""How a curve in outputs/pxrd.db is labelled on the Open PXRD site.
+"""How a curve in outputs/pxrd.db is labelled on the COF-PEAK site.
 
 The local database records the pipeline's own decision about each curve in two
 columns written by tools/admit_axis_verified.py: curves.admission (clean,

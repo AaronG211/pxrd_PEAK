@@ -110,7 +110,7 @@ writeFileSync(
 writeFileSync(
   resolve(publicDir, "robots.txt"),
   [
-    "# Open PXRD Database",
+    "# COF-PEAK",
     "User-agent: *",
     "Allow: /",
     "",

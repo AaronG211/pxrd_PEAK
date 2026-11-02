@@ -27,7 +27,7 @@ export function SiteFooter() {
     <footer className="mt-auto border-t border-slate-200 bg-white py-10">
       <div className="section-container">
         <div className="flex flex-col gap-1 text-sm sm:flex-row sm:items-baseline sm:justify-between sm:gap-3">
-          <p className="font-medium text-slate-700">Open PXRD Database</p>
+          <p className="font-medium text-slate-700">COF-PEAK</p>
           <p className="text-slate-500">Traceable diffraction data for materials researchers.</p>
         </div>
         <div className="mt-6 grid gap-6 text-xs leading-relaxed text-slate-500 md:grid-cols-3 md:gap-8">

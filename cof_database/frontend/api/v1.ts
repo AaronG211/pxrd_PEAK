@@ -1,5 +1,5 @@
 /**
- * Open PXRD Database — public read-only API, version 1.
+ * COF-PEAK — public read-only API, version 1.
  *
  *   https://pxrd-peak.vercel.app/api/v1
  *
@@ -496,7 +496,7 @@ function publicPath(url: URL): string {
 
 function index() {
   return {
-    name: "Open PXRD Database API",
+    name: "COF-PEAK API",
     version: VERSION,
     description:
       "Read-only access to powder X-ray diffraction patterns digitized from figures in published "

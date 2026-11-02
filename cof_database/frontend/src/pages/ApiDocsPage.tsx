@@ -157,7 +157,7 @@ export function ApiDocsPage() {
   usePageMeta({
     title: "API",
     description:
-      "Read-only JSON API for the Open PXRD Database: search papers, curves and materials, filter by first-peak position, and download digitized 2-theta / intensity data, one curve at a time or all at once. No key required.",
+      "Read-only JSON API for the COF-PEAK database: search papers, curves and materials, filter by first-peak position, and download digitized 2-theta / intensity data, one curve at a time or all at once. No key required.",
     canonical: "/docs/api",
   });
 

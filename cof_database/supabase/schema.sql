@@ -1,4 +1,4 @@
--- Open PXRD Database
+-- COF-PEAK
 -- Non-destructive schema creation. Run reset.sql first only when intentionally
 -- replacing the legacy COF database.
 --
