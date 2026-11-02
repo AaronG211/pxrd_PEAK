@@ -58,7 +58,10 @@ the 2026-10-21 change, which stay true as history.
 "Open PXRD Database" is too close to opXRD (Open Experimental Powder X-ray
 Diffraction Database, 2025); the PI flagged it and the author chose COF-PEAK.
 The URL (pxrd-peak.vercel.app) and the repository name (pxrd_PEAK) stay.
-The site code is renamed in this branch (title, header, footer, citation, API
+**Live since 2026-11-02: the rename alone was pushed to main as 99e1fd4c
+(deployed in about 45 s; browse snapshot rebuilt; `npm run test:api` 84/84).**
+This branch carries the same change as 186bcad8, so merging it later changes
+no name. The site code is renamed (title, header, footer, citation, API
 name and docs, sitemap header, export file name, READMEs, `.zenodo.json`).
 Applied migrations keep the old name in their comments, as history; the
 internal sessionStorage key `open-pxrd-auth-return-to` is unchanged so that a
