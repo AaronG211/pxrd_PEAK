@@ -1,4 +1,4 @@
-# Open PXRD frontend
+# COF-PEAK frontend
 
 React/Vite interface for browsing paper-linked PXRD figures and digitized data.
 

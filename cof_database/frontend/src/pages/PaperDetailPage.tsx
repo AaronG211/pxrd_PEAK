@@ -1193,7 +1193,7 @@ export function PaperDetailPage() {
           isPartOf: { "@type": "Dataset", "@id": DATASET_DOI_URL, url: DATASET_DOI_URL },
           includedInDataCatalog: {
             "@type": "DataCatalog",
-            name: "Open PXRD Database",
+            name: "COF-PEAK",
             url: `${SITE_ORIGIN}/`,
           },
           distribution: paper.figures
