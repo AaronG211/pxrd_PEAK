@@ -45,9 +45,31 @@ Counts after: clean 7,713 -> 7,558; axis_unconfirmed 517 -> 672; axis_verified
 4. **Data release.** Regenerate the export
    (`scripts/export_dataset.py --db ../outputs/pxrd.db --assets-root ../outputs/full-run-01 --out <EXPORT> --scope published`),
    attach it to a new GitHub release, and publish a new version of the Zenodo
-   data record (concept DOI 10.5281/zenodo.23539381). The Publish click on
+   data record (concept DOI 10.5281/zenodo.23539380; 23539381 is the
+   2026-10-21 version). The Publish click on
    Zenodo is the author's. `curves.csv` will show 155 curves with
    `admission = axis_unconfirmed`, `admission_reason = axis_contradicted`.
 `README.md` and the comments in `frontend/src/types.ts` already carry the new
 counts. `frontend/src/pages/HomePage.tsx` mentions 7,713 only in comments about
 the 2026-10-21 change, which stay true as history.
+
+## Rename to COF-PEAK (2026-11-02)
+
+"Open PXRD Database" is too close to opXRD (Open Experimental Powder X-ray
+Diffraction Database, 2025); the PI flagged it and the author chose COF-PEAK.
+The URL (pxrd-peak.vercel.app) and the repository name (pxrd_PEAK) stay.
+The site code is renamed in this branch (title, header, footer, citation, API
+name and docs, sitemap header, export file name, READMEs, `.zenodo.json`).
+Applied migrations keep the old name in their comments, as history; the
+internal sessionStorage key `open-pxrd-auth-return-to` is unchanged so that a
+login in progress is not broken.
+
+When publishing (steps 3 and 4), also:
+- Zenodo data record, new version: title
+  "COF-PEAK: powder X-ray diffraction curves digitized from figures in the
+  covalent organic framework literature" (the paper's reference 34 cites this
+  title; drop "(release 2026-10-21)").
+- Zenodo code record: the GitHub integration takes the title from
+  `.zenodo.json`, "pxrd_PEAK: extraction pipeline and website for the COF-PEAK
+  database" (the paper's reference 35).
+- GitHub repository description and the release notes, if they name the site.
