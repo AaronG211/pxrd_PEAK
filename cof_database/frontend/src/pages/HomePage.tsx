@@ -162,7 +162,7 @@ function exportManifest(
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = "open-pxrd-paper-manifest.csv";
+  anchor.download = "cof-peak-paper-manifest.csv";
   anchor.click();
   // Revoking synchronously after click() cancels the download in Safari.
   window.setTimeout(() => URL.revokeObjectURL(url), 10_000);

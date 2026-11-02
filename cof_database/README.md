@@ -1,4 +1,4 @@
-# Open PXRD Database
+# COF-PEAK
 
 This project is the public interface for a traceable database of digitized
 powder X-ray diffraction (PXRD) data. It is paper-centric: a researcher starts

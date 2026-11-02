@@ -34,7 +34,7 @@ export const DATASET_CREATOR = "Gao, Shenghan";
  * Together they read as one reference, ready to paste into a bibliography.
  */
 export const DATASET_CITATION_TEXT =
-  "Gao, S. (2026). Open PXRD Database: powder X-ray diffraction curves digitized from figures in "
+  "Gao, S. (2026). COF-PEAK: powder X-ray diffraction curves digitized from figures in "
   + "the covalent organic framework literature (release 2026-10-21) [Data set]. Zenodo.";
 
 /**

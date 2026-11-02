@@ -30,7 +30,7 @@ export function Header() {
         <Link to="/" className="flex items-center gap-2 reveal-up">
           <Database className="h-6 w-6 text-slate-900 transition-transform duration-300 hover:rotate-6" />
           <span className="text-xl font-semibold tracking-tight text-slate-900">
-            Open <span className="font-light text-slate-600">PXRD</span>
+            COF-<span className="font-light text-slate-600">PEAK</span>
           </span>
         </Link>
         <nav aria-label="Primary navigation" className="flex items-center gap-2 sm:gap-4">

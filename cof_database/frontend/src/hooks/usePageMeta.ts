@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-const SITE = "Open PXRD Database";
+const SITE = "COF-PEAK";
 
 export type PageMeta = {
   /** Page-specific part of the title. Pass null while the record resolves. */
