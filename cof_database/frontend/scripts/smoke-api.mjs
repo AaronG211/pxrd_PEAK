@@ -59,6 +59,26 @@ check("index 200", idx.status === 200);
 check("index lists endpoints", Array.isArray(idx.body.endpoints) && idx.body.endpoints.length >= 8);
 check("CORS header", idx.headers.get("access-control-allow-origin") === "*");
 check("cache header on 200", (idx.headers.get("cache-control") ?? "").includes("s-maxage"));
+check("bulk download names the GitHub releases",
+  idx.body.bulk_download === "https://github.com/AaronG211/pxrd_PEAK/releases", String(idx.body.bulk_download));
+check("index names no Zenodo record", !JSON.stringify(idx.body).toLowerCase().includes("zenodo"));
+
+/**
+ * The site shows no image from a source article (2026-11-11), and the API never
+ * returned one. Held here so that no record grows an image path or URL again:
+ * no key naming a crop, overlay, image or plot file, and no string ending in an
+ * image extension.
+ */
+function carriesImage(value) {
+  if (typeof value === "string") return /\.(png|webp|jpe?g|gif|svg)(\?|$)/i.test(value);
+  if (Array.isArray(value)) return value.some(carriesImage);
+  if (value && typeof value === "object") {
+    return Object.entries(value).some(([key, inner]) =>
+      /crop|overlay|image|digitized_plot/i.test(key) || carriesImage(inner));
+  }
+  return false;
+}
+check("index carries no image field or image URL", !carriesImage(idx.body));
 
 const statsResponse = await call("stats");
 if (statsResponse.status !== 200) {
@@ -119,6 +139,7 @@ check("paper detail has figures with curves",
   detail.body.figures.length > 0 && detail.body.figures.every((f) => Array.isArray(f.curves)));
 check("paper detail curve count matches index",
   detail.body.figures.reduce((n, f) => n + f.curves.length, 0) === somePaper.counts.curves);
+check("paper detail carries no image field or image URL", !carriesImage(detail.body));
 check("missing paper 404", (await call("papers/10.0000_does.not.exist")).status === 404);
 check("traversal-shaped id 404", (await call(`papers/${encodeURIComponent("../../etc")}`)).status === 404);
 
@@ -128,6 +149,7 @@ check("curve window 200", window.status === 200);
 check("curve window non-empty", window.body.data.length > 0);
 check("curve window respected", window.body.data.every((c) =>
   c.first_peak && c.first_peak.two_theta_deg >= 3.0 && c.first_peak.two_theta_deg <= 3.2 && c.first_peak.status === "ok"));
+check("curve list carries no image field or image URL", !carriesImage(window.body));
 
 const readmitted = await call("curves", "admission=axis_verified&limit=1");
 check("admission filter total == stats", readmitted.body.meta.total === stats.by_admission.axis_verified);
@@ -166,6 +188,7 @@ check("d-spacing labelled derived", honest.first_peak && "d_spacing_angstrom_der
 const one = await call(`curves/${honest.series_id}`);
 check("curve detail 200", one.status === 200);
 check("peak list labelled unvetted", "unvetted_peaks" in one.body && !("peaks" in one.body));
+check("curve detail carries no image field or image URL", !carriesImage(one.body));
 
 const data = await call(`curves/${honest.series_id}/data`);
 check("curve data 200", data.status === 200);
@@ -196,6 +219,7 @@ if (commaCurve) {
 const fig = await call(`figures/${honest.figure_id}`);
 check("figure detail 200", fig.status === 200 && Array.isArray(fig.body.curves));
 check("figure contains the curve", fig.body.curves.some((c) => c.series_id === honest.series_id));
+check("figure detail carries no image field or image URL", !carriesImage(fig.body));
 const figData = await call(`figures/${honest.figure_id}/data`);
 check("figure data redirects to storage", figData.status === 302
   && (figData.headers.get("location") ?? "").endsWith("/curves.csv.gz"));
@@ -245,6 +269,7 @@ check("every curve has a doi", everyCurve.every((c) => typeof c.doi === "string"
 // --- material label groups ----------------------------------------------------
 const tppa = await call("materials", "q=TpPa1");
 check("materials 200", tppa.status === 200);
+check("materials carry no image field or image URL", !carriesImage(tppa.body));
 check("hyphen-free query finds the TpPa-1 group", tppa.body.meta.exact_match?.id === "tppa1",
   JSON.stringify(tppa.body.meta.exact_match?.id));
 check("query key reported", tppa.body.meta.query_key === "tppa1");

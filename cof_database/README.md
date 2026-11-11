@@ -2,14 +2,16 @@
 
 This project is the public interface for a traceable database of digitized
 powder X-ray diffraction (PXRD) data. It is paper-centric: a researcher starts
-from a publication, sees every indexed PXRD figure, compares the published crop
-with reconstructed traces, and downloads the curve data.
+from a publication, sees every indexed PXRD figure with an interactive replot of
+its curves, and downloads the curve data.
 
 ## Current scope
 
 - Paper index with paper number, title, DOI, journal, and year
 - Search across paper metadata
-- Side-by-side source crop and trace overlay, with an interactive replot of the digitized curves
+- Per figure: its label, page and calibration checks, and an interactive replot
+  of the digitized curves. No image from the source article is shown (see "No
+  images from source articles" below)
 - Per-figure curve inventory and CSV download
 - Supabase-ready public read model
 - Citation, license and removal-request notice on every page
@@ -29,7 +31,8 @@ React/Vite website
         | anonymous public reads / authenticated private workspace
         v
 Supabase Postgres  -- paper, figure, and curve metadata
-Supabase Storage   -- source crops, digitized plots, overlays, CSV/Parquet files
+Supabase Storage   -- one curves.csv.gz per figure (plus legacy digitized.webp
+                      replots, unused)
 ```
 
 The private workspace is deliberately a Phase-A shell: it stores PDFs, the
@@ -98,9 +101,9 @@ The importer selects complete papers using a stable hash, so rerunning the same
 limit always targets the same records. It began as a clean-set pilot; since
 2026-10-21 it publishes every curve the paper releases (2,370 papers, 4,664
 figures, 11,445 curves), each labelled with its `admission` class — see
-"Curve admission" below. It converts source and
-digitized images to lossless WebP, combines each figure's points into one
-compressed CSV, skips existing objects, and upserts metadata.
+"Curve admission" below. It combines each figure's points into one compressed
+CSV, uploads it unless the stored copy is byte-identical, and upserts metadata.
+It uploads no image.
 
 ```bash
 # Inspect the first 10 papers without network writes
@@ -114,8 +117,8 @@ python3 -u scripts/import_pxrd_to_supabase.py --limit 1000 --workers 8
 ```
 
 The approved 1,000-paper pilot contains 1,866 figures and 3,815 clean curves.
-The command is safe to resume after interruption because existing Storage
-objects are detected and all metadata writes are idempotent upserts.
+The command is safe to resume after interruption because a data file identical
+to the stored copy is skipped and all metadata writes are idempotent upserts.
 
 Run the migrations in date order before the first import that carries their
 columns; without them the upsert fails on the unknown columns.
@@ -126,11 +129,23 @@ columns; without them the upsert fails on the unknown columns.
 4. `supabase/migrations/20261021_publish_all_accepted.sql` — widens
    `pxrd_curves_admission_check` to the five classes. Run it before the import
    that publishes them, or the curve upsert fails on the CHECK.
+5. `supabase/migrations/20261029_axis_contradicted_out_of_clean.sql` — moves
+   the 155 clean curves on axis-contradicted figures to `axis_unconfirmed`. No
+   schema change. Strip its `begin;` / `commit;` before pasting it into the SQL
+   editor.
+6. `supabase/migrations/20261111_remove_publisher_images.sql` — drops
+   `crop_path`, `digitized_plot_path` and `overlay_path`, and makes
+   `pxrd-assets` accept `application/gzip` uploads only. The importer no longer
+   sends the columns, and two are NOT NULL, so a full import refuses to start
+   until this has run. Run it only once the frontend that no longer reads them
+   is live (see `DEPLOY_NOTES_2026-10-29.md`).
 
-Neither has been run against production. Migrations run in date order and older
-ones are not re-run afterwards, so the 20260830 file deliberately leaves
-`pxrd_paper_index` alone: `create or replace view` can neither drop nor reorder
-columns, and redefining the view here would make the 20260828 file unrepeatable.
+Items 1 to 4 are in production; the live site reads their columns. Items 5
+and 6 have not been run yet; `DEPLOY_NOTES_2026-10-29.md` gives the order.
+Migrations run in date order and older ones are not re-run afterwards, so the
+20260830 file deliberately leaves `pxrd_paper_index` alone: `create or replace
+view` can neither drop nor reorder columns, and redefining the view here would
+make the 20260828 file unrepeatable.
 
 `--metadata-only` writes `pxrd_papers` and nothing else. It is the right command
 for a metadata-only sync and the wrong one for publishing the pilot; only the
@@ -138,13 +153,8 @@ full path writes `pxrd_figures`, `pxrd_curves`, `pxrd_material_groups`, and the
 Storage objects. The importer now says so at the end of every `--metadata-only`
 run rather than leaving the omission silent.
 
-Three flags are off by default:
+Two flags are off by default:
 
-- `--upload-overlays` also publishes `overlay.webp`, the extracted trace drawn
-  on the source figure, and sets `overlay_path`. It roughly doubles the pilot's
-  Storage footprint, which is why it is opt-in. While it is off the
-  `overlay_path` key is omitted from the payload entirely, so any value already
-  live is preserved rather than cleared.
 - `--allow-unverified` publishes figures whose `result.json` could not be read.
   The importer refuses by default: those figures would be published as
   `axis_unverified`, and because the upsert merges duplicates that could
@@ -162,6 +172,45 @@ would overwrite it. Every gate is table-level, never row-level: PostgREST builds
 one column list per bulk insert and rejects a batch whose objects have differing
 key sets (`PGRST102`), so a key added under a per-row condition would fail up to
 300 rows at once.
+
+## No images from source articles
+
+Since 2026-11-11 the site shows, serves and stores no image taken from another
+author's figure, whatever the article's license. Until then each figure card
+showed a crop of the published figure (`source.webp`) and the extracted trace
+drawn over it (`overlay.webp`). A figure is now identified by its label, page
+and the paper's DOI, and the only picture of it is the interactive replot drawn
+from our own curve data. The curve data stay CC BY 4.0; a quoted caption is
+the one item left that is the source article's.
+
+- The importer uploads no image and writes no image path. The
+  `--upload-overlays`, `--trim` and `--trim-top` flags are gone, and so is
+  `scripts/figure_trim.py`, which only trimmed those two images.
+- `supabase/migrations/20261111_remove_publisher_images.sql` drops the three
+  image path columns of `pxrd_figures` and makes `pxrd-assets` refuse any
+  upload that is not `application/gzip`, so an older importer cannot put the
+  crops back. It also takes `image/png` and `image/webp` off the private
+  `pxrd-user-results` bucket, to which no worker writes yet.
+- `scripts/delete_publisher_images.py` deletes the images already in the
+  `pxrd-assets` bucket. It deletes only images whose names say they were made
+  from the source's pixels (the words source, crop, overlay or montage, or a
+  rendered `page-NNN`), never `curves.csv.gz` or our own replot (exactly
+  `digitized.*` or `replot_qa.*`), and reports any other name instead of
+  guessing. It exits 1 when the listing holds no `curves.csv.gz`, because an
+  empty listing proves nothing. It reads credentials like the importer and
+  prints no key.
+
+  ```bash
+  python3 scripts/delete_publisher_images.py                   # dry run: lists and counts
+  python3 scripts/delete_publisher_images.py --report r.json   # dry run, every path to r.json
+  python3 scripts/delete_publisher_images.py --apply           # delete, then list again
+  ```
+
+  The dry run of 2026-11-11 found 18,656 objects: 9,328 to delete (4,664
+  `source.webp`, 4,664 `overlay.webp`, 240.7 MiB), 4,664 `digitized.webp` and
+  4,664 `curves.csv.gz` to keep, none unclassified.
+
+The deploy order for this change is in `DEPLOY_NOTES_2026-10-29.md`.
 
 ## Running without the pipeline assets volume
 

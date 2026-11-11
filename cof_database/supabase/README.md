@@ -13,19 +13,26 @@
    VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
    ```
 
-5. Upload assets into the public `pxrd-assets` bucket. Store the object paths,
-   not complete URLs, in `crop_path`, `digitized_plot_path`, `overlay_path`, and
-   `data_path`.
+5. Upload each figure's curve data into the public `pxrd-assets` bucket and
+   store its object path, not a complete URL, in `pxrd_curves.data_path`. The
+   importer does both.
 
-Recommended object layout:
+Object layout:
 
 ```text
 pxrd-assets/
-  papers/<paper-id>/figures/<figure-id>/source.png
-  papers/<paper-id>/figures/<figure-id>/digitized.png
-  papers/<paper-id>/figures/<figure-id>/overlay.png
-  papers/<paper-id>/figures/<figure-id>/curves.csv
+  papers/<paper-id>/<figure-id>/curves.csv.gz
+  papers/<paper-id>/<figure-id>/digitized.webp   legacy, unused
 ```
+
+`digitized.webp`, our own replot of the curve data, is left in place but is no
+longer uploaded or shown. Until 2026-11-11 the bucket also received
+`source.webp` (the figure crop) and `overlay.webp` (the trace drawn over it).
+`migrations/20261111_remove_publisher_images.sql` drops their path columns and
+lets the bucket accept `application/gzip` uploads only. Once
+`../scripts/delete_publisher_images.py --apply` has run, the bucket holds no
+image taken from a source article's figure; until then those objects are
+still there.
 
 The public database surface is read-only. Never place a Supabase service-role
 key in a `VITE_` variable or commit it to the repository. Curated writes should

@@ -112,8 +112,6 @@ const DEMO_RECORDS: DemoPaper[] = [
         pageNumber: 15,
         caption:
           "Experimental brick-wall COF PXRD with simulated brick-wall and herringbone AA/AB packing models.",
-        sourceCropUrl: "/demo/adfm-201705553-source.png",
-        overlayUrl: null,
         qualityStatus: "pending",
         verificationStatus: "axis_cross_validated",
         axisAgreementDeg: 0.041,
@@ -159,8 +157,6 @@ const DEMO_RECORDS: DemoPaper[] = [
         figureLabel: "Figure 2f",
         pageNumber: 3,
         caption: "Experimental PXRD compared with AA, AB, and ABC stacking models.",
-        sourceCropUrl: "/demo/anie-202113657-source.png",
-        overlayUrl: null,
         qualityStatus: "flagged",
         // The two axis fits disagreed across the plot. Every position on this
         // figure is provisional, and the small per-trace residuals below are
@@ -205,8 +201,6 @@ const DEMO_RECORDS: DemoPaper[] = [
         figureLabel: "Figure 2b",
         pageNumber: 3,
         caption: "COF-C2-80 experimental pattern with simulated AA, AB, and ABC stacking models.",
-        sourceCropUrl: "/demo/chemmater-3c01952-source.png",
-        overlayUrl: null,
         qualityStatus: "pending",
         verificationStatus: "axis_single_method",
         axisAgreementDeg: null,

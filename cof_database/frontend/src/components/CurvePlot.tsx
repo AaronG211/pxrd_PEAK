@@ -178,7 +178,7 @@ export function CurvePlot({
   /**
    * Offset by default whenever there is more than one trace. Published PXRD
    * figures almost always stack their patterns, so the overlaid view was the one
-   * that did NOT look like the source crop above it, and with every trace on a
+   * that did NOT look like the published figure, and with every trace on a
    * shared axis the tallest one flattens the rest. A single trace has nothing to
    * offset from and opens overlaid, with its intensity axis. Read once at mount:
    * the section only mounts this component after the figure's data has loaded.

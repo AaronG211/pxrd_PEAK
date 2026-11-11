@@ -66,8 +66,6 @@ type DbFigure = {
   figure_label: string | null;
   page_number: number | null;
   caption: string | null;
-  crop_path: string;
-  overlay_path: string | null;
   quality_status: PxrdFigure["qualityStatus"];
   sort_order: number;
   pxrd_curves: DbCurve[] | null;
@@ -330,33 +328,17 @@ async function fetchAllCurveFacets(): Promise<DbCurveFacet[]> {
 }
 
 /**
- * Version of the figure images (source.webp, overlay.webp) in Storage, sent as
- * `?v=` on their URLs. BUMP IT in the same rollout as every importer run with
- * --force-assets that changes image bytes (e.g. --trim): the importer
- * overwrites those objects in place at fixed paths, and a browser that cached
- * the old URL keeps showing the old image, possibly one tile of the pair and
- * not the other. Deploy the bump AFTER the upload: a page served with the new
- * value before the new bytes exist caches the old image under the new URL.
- * Only the browser cache keys on the query string: the project's Smart CDN
- * ignores it (on 2026-10-24 a never-requested `?v=` came back cf-cache-status
- * HIT with the same bytes) and, per Supabase's docs, drops its edge copy of an
- * object when the object is overwritten.
- *
- * Images only. curves.csv.gz is rewritten on a different trigger (whenever its
- * content differs from the database, without --force-assets), so a version
- * bumped by hand for images would not track it, and its URL is published as
- * the dataset's contentUrl and by /api/v1, where it should stay canonical.
+ * Public URL of a curve data file (curves.csv.gz) in Storage. The only asset
+ * the site loads: since 2026-11-11 it shows no image from a source article. The
+ * URL carries no `?v=`, because it is published as the dataset's contentUrl and
+ * by /api/v1, where it should stay canonical.
  */
-const IMAGE_ASSET_VERSION = "2026-10-24t1";
-
-function assetUrl(path: string | null, version?: string): string {
+function assetUrl(path: string | null): string {
   if (!path) return "";
   // Absolute and demo paths are not Storage objects and are returned as given.
   if (/^(https?:)?\//.test(path)) return path;
   if (!supabase) return path;
-  const url = supabase.storage.from("pxrd-assets").getPublicUrl(path).data.publicUrl;
-  if (!version) return url;
-  return `${url}${url.includes("?") ? "&" : "?"}v=${encodeURIComponent(version)}`;
+  return supabase.storage.from("pxrd-assets").getPublicUrl(path).data.publicUrl;
 }
 
 function mapCurve(curve: DbCurve): PxrdCurve {
@@ -398,8 +380,6 @@ function mapFigure(figure: DbFigure): PxrdFigure {
     figureLabel: figure.figure_label,
     pageNumber: figure.page_number,
     caption: figure.caption,
-    sourceCropUrl: assetUrl(figure.crop_path, IMAGE_ASSET_VERSION),
-    overlayUrl: figure.overlay_path ? assetUrl(figure.overlay_path, IMAGE_ASSET_VERSION) : null,
     qualityStatus: figure.quality_status,
     verificationStatus: figure.verification_status ?? null,
     axisAgreementDeg: numberOrNull(figure.axis_agreement_deg),
@@ -809,8 +789,7 @@ export async function fetchPaper(id: string): Promise<PaperDetail> {
       id, paper_number, doi, title, authors, journal, publication_year, source_url,
       ${withStatus ? `${PAPER_STATUS_COLUMNS},` : ""}
       pxrd_figures (
-        id, figure_label, page_number, caption, crop_path,
-        overlay_path, quality_status, sort_order,
+        id, figure_label, page_number, caption, quality_status, sort_order,
         ${withVerification ? `${FIGURE_VERIFICATION_COLUMNS},` : ""}
         ${withExclusionSplit ? `${FIGURE_EXCLUSION_COLUMN},` : ""}
         pxrd_curves (

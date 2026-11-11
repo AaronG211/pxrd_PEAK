@@ -207,14 +207,13 @@ export interface PxrdFigure {
   figureLabel: string | null;
   pageNumber: number | null;
   caption: string | null;
-  sourceCropUrl: string;
   /*
-   * No digitized-plot URL. pxrd_figures.digitized_plot_path still exists and the
-   * importer still fills it, but it points at the pipeline's QA replot, which
-   * the paper page stopped showing: the interactive plot draws the same points.
-   * It is not selected, so no page can drift back to rendering it.
+   * No image URL. Since 2026-11-11 the site shows no image taken from the
+   * source article's figure (no crop, no trace overlay), and migration
+   * 20261111_remove_publisher_images.sql drops crop_path, overlay_path and
+   * digitized_plot_path. The interactive plot, drawn from the curve data, is
+   * the only picture of a figure on the page.
    */
-  overlayUrl: string | null;
   qualityStatus: FigureQualityStatus;
   /**
    * Automated verification signals. Every one of these is null until the
