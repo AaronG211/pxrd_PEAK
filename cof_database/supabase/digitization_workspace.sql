@@ -137,6 +137,10 @@ create policy "Users read own job files"
 drop policy if exists "Users register own draft inputs" on public.digitization_job_files;
 drop policy if exists "Users delete own draft input manifests" on public.digitization_job_files;
 
+-- No worker writes to pxrd-user-results yet, so it accepts no image type. Add
+-- image/png or image/webp back only with a worker whose images are our own
+-- renders of the extracted data: the site shows no crop of a source figure and
+-- no trace drawn over one (2026-11-11), private pages included.
 insert into storage.buckets
   (id, name, public, file_size_limit, allowed_mime_types)
 values
@@ -153,8 +157,6 @@ values
     false,
     52428800,
     array[
-      'image/png',
-      'image/webp',
       'text/csv',
       'text/plain',
       'application/json',

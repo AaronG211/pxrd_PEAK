@@ -6,8 +6,8 @@
  * (6,028 of the 11,445 published curves are `unclassified`, 5,332
  * `experimental`), and in 2,303 of the 2,576 multi-curve figures every curve has
  * the same one (outputs/pxrd.db, 2026-10-24). So a four-curve figure came out as
- * two shades of one hue told apart only by dashes, while the source figure
- * beside it showed four coloured, offset traces. Every series now gets its own
+ * two shades of one hue told apart only by dashes, while the published figure
+ * showed four coloured, offset traces. Every series now gets its own
  * hue, in series order, and the legend, the readout and the plot's own labels
  * take the same value from here.
  *

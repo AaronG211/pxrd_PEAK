@@ -1,10 +1,10 @@
 import {
   ARTICLE_STATUS,
-  CODE_DOI_URL,
   CODE_LICENSE_NAME,
   CODE_LICENSE_URL,
+  CODE_URL,
   DATASET_CITATION_TEXT,
-  DATASET_DOI_URL,
+  DATASET_URL,
   DATA_LICENSE_NAME,
   DATA_LICENSE_URL,
   ISSUES_URL,
@@ -37,14 +37,14 @@ export function SiteFooter() {
             </h2>
             <p className="mt-2 text-slate-600 [overflow-wrap:anywhere]">
               {DATASET_CITATION_TEXT}{" "}
-              <a href={DATASET_DOI_URL} target="_blank" rel="noreferrer" className={link}>
-                {DATASET_DOI_URL}
+              <a href={DATASET_URL} target="_blank" rel="noreferrer" className={link}>
+                {DATASET_URL}
               </a>
             </p>
             <p className="mt-2">
               Code:{" "}
-              <a href={CODE_DOI_URL} target="_blank" rel="noreferrer" className={`${link} [overflow-wrap:anywhere]`}>
-                {CODE_DOI_URL}
+              <a href={CODE_URL} target="_blank" rel="noreferrer" className={`${link} [overflow-wrap:anywhere]`}>
+                {CODE_URL}
               </a>{" "}
               ({CODE_LICENSE_NAME}). Article: {ARTICLE_STATUS}. Please also cite the source paper
               of every curve you use; its DOI is shown on each paper page and in the{" "}

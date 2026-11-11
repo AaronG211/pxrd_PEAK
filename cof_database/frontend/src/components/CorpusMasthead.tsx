@@ -49,9 +49,9 @@ export function CorpusMasthead({
             Powder X-ray diffraction, recovered from the literature
           </h1>
           <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-slate-600">
-            Every curve keeps the published figure crop beside its reconstructed
-            trace and a downloadable 2θ / intensity file, so the extraction stays
-            inspectable rather than replacing the source.
+            Every curve is linked to the paper and figure it came from and has a
+            downloadable 2θ / intensity file, so the extraction stays inspectable
+            rather than replacing the source.
           </p>
         </div>
         {/* A data resource's size is the only credential that matters on arrival,

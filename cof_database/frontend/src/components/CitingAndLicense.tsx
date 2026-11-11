@@ -1,10 +1,10 @@
 import {
   ARTICLE_STATUS,
-  CODE_DOI_URL,
   CODE_LICENSE_NAME,
   CODE_LICENSE_URL,
+  CODE_URL,
   DATASET_CITATION_TEXT,
-  DATASET_DOI_URL,
+  DATASET_URL,
   DATA_LICENSE_NAME,
   DATA_LICENSE_URL,
   ISSUES_URL,
@@ -19,10 +19,9 @@ const link = "font-medium text-blue-700 hover:underline";
  * facts in short; both read their strings from lib/citation.
  *
  * The license paragraph separates the two kinds of thing a page shows. The
- * points and their metadata are this project's output and are CC BY. The crop,
- * the overlay and a quoted caption are the source article's, shown so a reader
- * can check the trace against the ink; reusing a curve must not read as
- * permission to reuse the figure or the text it came from.
+ * points and their metadata are this project's output and are CC BY. A quoted
+ * caption is the source article's; reusing a curve must not read as permission
+ * to reuse the text it came from.
  */
 export function CitingAndLicense() {
   return (
@@ -32,14 +31,14 @@ export function CitingAndLicense() {
         <p className="mt-1.5">If you use these data, cite the dataset:</p>
         <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-800 [overflow-wrap:anywhere]">
           {DATASET_CITATION_TEXT}{" "}
-          <a href={DATASET_DOI_URL} target="_blank" rel="noreferrer" className={link}>
-            {DATASET_DOI_URL}
+          <a href={DATASET_URL} target="_blank" rel="noreferrer" className={link}>
+            {DATASET_URL}
           </a>
         </p>
         <p className="mt-2">
           The code that produced it:{" "}
-          <a href={CODE_DOI_URL} target="_blank" rel="noreferrer" className={`${link} [overflow-wrap:anywhere]`}>
-            {CODE_DOI_URL}
+          <a href={CODE_URL} target="_blank" rel="noreferrer" className={`${link} [overflow-wrap:anywhere]`}>
+            {CODE_URL}
           </a>{" "}
           ({CODE_LICENSE_NAME}). The accompanying article is a {ARTICLE_STATUS}.
         </p>

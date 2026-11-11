@@ -46,9 +46,9 @@ create table if not exists public.pxrd_figures (
   figure_label text,
   page_number integer check (page_number is null or page_number > 0),
   caption text,
-  crop_path text not null,
-  digitized_plot_path text not null,
-  overlay_path text,
+  -- No image path: the site shows no image taken from a source article's
+  -- figure (migrations/20261111_remove_publisher_images.sql). A figure's only
+  -- Storage object is its curves.csv.gz, named by pxrd_curves.data_path.
   -- Derived by the importer, never asserted. 'flagged' means an automated
   -- check disputed the figure; 'pending' means nothing did.
   quality_status text not null default 'pending'
@@ -423,9 +423,13 @@ create policy "Public can read PXRD curves"
 grant select on public.pxrd_paper_index to anon, authenticated;
 grant select on public.pxrd_material_groups to anon, authenticated;
 
-insert into storage.buckets (id, name, public)
-values ('pxrd-assets', 'pxrd-assets', true)
-on conflict (id) do update set public = excluded.public;
+-- curves.csv.gz only: Storage refuses any other Content-Type, so no image can
+-- land here by mistake (migrations/20261111_remove_publisher_images.sql).
+insert into storage.buckets (id, name, public, allowed_mime_types)
+values ('pxrd-assets', 'pxrd-assets', true, array['application/gzip'])
+on conflict (id) do update
+set public = excluded.public,
+    allowed_mime_types = excluded.allowed_mime_types;
 
 drop policy if exists "Public can read PXRD assets" on storage.objects;
 create policy "Public can read PXRD assets"

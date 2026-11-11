@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Stream the deterministic PXRD corpus into Supabase.
 
-The importer is idempotent: metadata is upserted and existing Storage objects
-are skipped unless --force-assets is supplied. Images and CSVs are converted in
-memory, so no second multi-gigabyte staging tree is created on disk.
+The importer is idempotent: metadata is upserted, and a figure's data file is
+uploaded only when it differs from the stored copy (or with --force-assets).
+The data files are built in memory, so no staging tree is written to disk.
 
 Quality rule: `quality_status` is DERIVED, never asserted. It has exactly two
 values, 'pending' and 'flagged'. There is no 'reviewed': no human reviews
@@ -47,18 +47,18 @@ TABLE-level, never row-level: PostgREST builds one column list per bulk insert
 and rejects a batch whose objects have differing key sets (PGRST102), so a key
 added under a per-row condition would fail up to 300 rows at once.
 
-Image rule: the pipeline's crop often caught the first caption line below the
-plot or the journal's running header above it. With --trim, figure_trim.py
-finds those strips from the plot frame drawn in overlay.png, and source.webp
-and overlay.webp are published at the same reduced box. Trimming is opt-in
-because it has been checked only on a local pool of 279 figures, not on the
-stored corpus; without --trim both images are the crop as it is on disk. The
-page shows the two side by side, so they must never be published at different
-boxes: whenever one of them is encoded the other is re-encoded with it, and
---trim is refused without --upload-overlays, which is the only way this run
-can rewrite a live overlay.webp. Existing Storage objects are never
-re-encoded unless --force-assets is passed, so trimming reaches figures
-already live only through a --trim --force-assets --upload-overlays run.
+Image rule: the importer publishes no image. Since 2026-11-11 the site shows
+no image taken from a source article's figure, so the crop (source.webp), the
+trace overlay (overlay.webp) and our own QA replot (digitized.webp) are no
+longer uploaded, and pxrd_figures carries no image path (migration
+20261111_remove_publisher_images.sql). The only Storage object a figure gets
+is its curves.csv.gz. scripts/delete_publisher_images.py removes the
+publisher-derived objects that earlier runs uploaded. Run that migration before
+this importer: until it drops the NOT NULL crop_path and digitized_plot_path
+columns, every figure upsert fails with a not-null violation (23502), because
+Postgres checks the proposed row before it resolves the conflict. A full run
+therefore checks first that crop_path is gone and refuses before any upload
+or upsert while it is not (Supabase.require_image_columns_dropped).
 """
 
 from __future__ import annotations
@@ -83,11 +83,9 @@ from urllib.parse import quote
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from PIL import Image
 
-# Sibling module in this directory; Python puts the script's own directory on
+# Sibling modules in this directory; Python puts the script's own directory on
 # sys.path, so this works however the script is invoked.
-from figure_trim import trim_for_files
 from material_labels import build_groups
 from site_admission import (
     SITE_ADMISSIONS,
@@ -171,16 +169,6 @@ CURVE_TEXT_COLUMNS = {
 
 # tools/first_peak.py: CU_KA = 1.5406. Applied whenever the paper did not report
 # a usable wavelength, which in this corpus is every published curve.
-# Every image asset is encoded at this effort. See webp_bytes for the
-# measurement behind it.
-WEBP_METHOD = 4
-
-# The two assets built from the publisher's own figure are published as
-# thumbnails, not as reproductions. See webp_bytes for the measurement and the
-# reasoning; digitized.webp is our own rendering and is exempt.
-PUBLISHER_ASSET_MAX_WIDTH = 640
-PUBLISHER_ASSET_QUALITY = 88
-
 CU_KA_ANGSTROM = 1.5406
 WAVELENGTH_ASSUMED = "assumed_cu_ka"
 WAVELENGTH_REPORTED = "paper_reported"
@@ -299,12 +287,38 @@ class Supabase:
                 f"HTTP {response.status_code}: {response.text[:300]}"
             )
 
-    def object_exists(self, object_path: str) -> bool:
-        response = self.session().head(
-            f"{self.url}/storage/v1/object/public/{BUCKET}/{quote(object_path, safe='/')}",
-            timeout=(15, 60),
+    def require_image_columns_dropped(self) -> None:
+        """Refuse to write until 20261111_remove_publisher_images.sql has run.
+
+        Before it, crop_path and digitized_plot_path are NOT NULL and every
+        figure upsert fails with 23502. That failure comes only after the
+        changed curves.csv.gz files are uploaded and pxrd_papers is written,
+        which would leave the data files out of step with the figure and curve
+        rows. PostgREST answers a select of a dropped column with HTTP 400 and
+        Postgres code 42703; an HTTP 200 means the column is still there.
+        """
+        response = self.session().get(
+            f"{self.url}/rest/v1/pxrd_figures",
+            params={"select": "crop_path", "limit": 1},
+            headers=self.headers,
+            timeout=30,
         )
-        return response.status_code == 200
+        if response.status_code == 200:
+            raise RuntimeError(
+                "pxrd_figures still has crop_path: run "
+                "supabase/migrations/20261111_remove_publisher_images.sql in the "
+                "SQL editor first (DEPLOY_NOTES_2026-10-29.md). Nothing was written."
+            )
+        try:
+            code = response.json().get("code")
+        except (ValueError, AttributeError):
+            code = None
+        if response.status_code != 400 or code != "42703":
+            raise RuntimeError(
+                "Could not tell whether the 20261111 migration has run, so "
+                "nothing was written. "
+                f"HTTP {response.status_code}: {response.text[:300]}"
+            )
 
     def object_etag(self, object_path: str) -> str | None:
         """The stored object's ETag, unquoted, or None when it does not exist.
@@ -331,9 +345,8 @@ class Supabase:
                 "x-upsert": "true",
                 # Served back as "cache-control: public, 31536000" (checked
                 # 2026-10-24): no max-age=, so browsers fall back to heuristic
-                # freshness rather than one year. Either way an object
-                # overwritten here can stay cached in browsers; see
-                # IMAGE_ASSET_VERSION in frontend/src/lib/api.ts.
+                # freshness rather than one year. Either way a data file
+                # overwritten here can stay cached in browsers for a while.
                 "Cache-Control": "31536000",
             },
             timeout=(15, 180),
@@ -724,7 +737,6 @@ def fetch_metadata(
     conn: sqlite3.Connection,
     paper_ids: list[str],
     assets_root: Path | None = None,
-    include_overlays: bool = False,
 ) -> tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
@@ -892,7 +904,6 @@ def fetch_metadata(
     for figure_id, paper_id, label, page, caption, figure_status in figure_rows:
         order = figure_order.get(paper_id, 0)
         figure_order[paper_id] = order + 1
-        base = f"papers/{paper_id}/{figure_id}"
         verification = (
             read_verification(assets_root / paper_id / figure_id / "result.json")
             if assets_root is not None
@@ -911,8 +922,8 @@ def fetch_metadata(
             # Nothing in the corpus violates it today (min 1, max 46).
             "page_number": bounded_int(page, minimum=1),
             "caption": caption or None,
-            "crop_path": f"{base}/source.webp",
-            "digitized_plot_path": f"{base}/digitized.webp",
+            # No image path: a figure has no image in Storage (see the image
+            # rule in the module docstring).
             "quality_status": quality_status,
             "verification_status": verification.status,
             "axis_agreement_deg": verification.agreement_deg,
@@ -924,8 +935,6 @@ def fetch_metadata(
             "series_excluded_quality": omitted_quality.get(figure_id, 0),
             "sort_order": order,
         }
-        if include_overlays:
-            figure["overlay_path"] = f"{base}/overlay.webp"
         figures.append(figure)
         figure_refs.append(FigureRef(paper_id, figure_id))
 
@@ -1295,64 +1304,6 @@ def infer_role(context_role: str | None, label: str | None, state: str | None) -
     return "unclassified"
 
 
-def webp_bytes(
-    path: Path,
-    method: int = WEBP_METHOD,
-    max_width: int | None = None,
-    quality: int | None = None,
-    box: tuple[int, int, int, int] | None = None,
-) -> bytes:
-    """WebP for one asset. Lossless and full-size unless bounded.
-
-    `box` is a PIL crop box applied before anything else, so the width bound
-    is taken of the trimmed image. figure_trim only ever removes rows, so a
-    trimmed thumbnail keeps the width, and the scale, of an untrimmed one.
-
-    `method` trades encode time for size, never quality. method=4, not the
-    encoder default of 0: measured over the pilot, crop.png encodes to 305 KB at
-    method=0 and 177 KB at method=4, for about two minutes of CPU across eight
-    workers for the whole corpus, once. method=6 buys 1 KB per image for 30%
-    more time and is not worth it.
-
-    OUR OWN OUTPUT stays lossless and full-size. digitized.webp is a plot this
-    project drew; nothing is gained by degrading it and it is 16 KB either way.
-
-    THE PUBLISHER'S PIXELS are bounded, by `max_width` and `quality`. source.webp
-    and overlay.webp are built from the journal's own figure, and publishing them
-    losslessly at 1501 px meant serving a pixel-exact, full-resolution copy of a
-    copyrighted work - at 3.5x the ~430 px the page ever displays. Bounding them
-    to 640 px at q=88 changes nothing a reader can see, and it moves the artefact
-    from a reproduction toward a thumbnail. Measured over all 3,694 clean-set
-    figures, source + overlay together:
-
-        full-resolution lossless   1110 MiB   (Free plan ceiling is 1024 MiB)
-        640 px lossless             528 MiB
-        640 px q=88                 180 MiB
-
-    The earlier rejection of lossy WebP still stands for the ORIGINALS on disk
-    and for anything meant to be measured from: at q=90 a full-size overlay moves
-    trace pixels by up to 127/255, because thin saturated lines over a
-    photographic crop are the worst case for DCT ringing. That argument is about
-    fidelity to the ink at full resolution. These are display thumbnails; the
-    measurable artefact is curves.csv.gz, which is exact and unaffected.
-    """
-    with Image.open(path) as image:
-        image.load()
-        if box is not None and box != (0, 0, image.width, image.height):
-            image = image.crop(box)
-        if max_width is not None and image.width > max_width:
-            height = round(image.height * max_width / image.width)
-            image = image.resize((max_width, height), Image.LANCZOS)
-        output = io.BytesIO()
-        if quality is None:
-            image.save(output, format="WEBP", lossless=True, method=method)
-        else:
-            if image.mode not in ("RGB", "RGBA"):
-                image = image.convert("RGB")
-            image.save(output, format="WEBP", quality=quality, method=method)
-        return output.getvalue()
-
-
 def figure_csv_gz(conn: sqlite3.Connection, figure_id: str) -> bytes:
     output = io.BytesIO()
     with gzip.GzipFile(fileobj=output, mode="wb", compresslevel=6, mtime=0) as zipped:
@@ -1408,112 +1359,16 @@ _refreshed_lock = threading.Lock()
 _refreshed_csvs: list[str] = []
 
 
-def upload_figure(
-    supabase: Supabase,
-    db_path: Path,
-    assets_root: Path,
-    figure: FigureRef,
-    force_assets: bool,
-    include_overlays: bool = False,
-    trim: bool = False,
-    trim_top: bool = False,
-) -> int:
-    base = assets_root / figure.paper_id / figure.figure_id
-    source = base / "crop.png"
-    digitized = base / "replot_qa.png"
-    if not source.is_file() or not digitized.is_file():
-        raise FileNotFoundError(f"Missing figure assets under {base}")
-    overlay = base / "overlay.png"
-    if include_overlays and not overlay.is_file():
-        raise FileNotFoundError(f"Missing overlay.png under {base}")
-
-    # One box for both publisher images, computed at most once and only when
-    # one of them is actually about to be encoded: a resumed run that skips
-    # every existing object never reads overlay.png for it. A figure without
-    # a readable frame keeps its full crop (see figure_trim.py).
-    trim_box: list[tuple[int, int, int, int] | None] = []
-
-    def publisher_box() -> tuple[int, int, int, int] | None:
-        if not trim:
-            return None
-        if not trim_box:
-            box = trim_for_files(source, overlay).box
-            # Bottom-only by default. The full-corpus review (2026-10-24, 5
-            # disjoint samples of 60 plus every suspect cut) found no bottom
-            # cut that removed anything of the panel being shown, but 103 top
-            # cuts that removed the sliced bottom of the panel ABOVE (photo
-            # strips, axis lines, tick labels left orphaned): figure content,
-            # even if not this panel's. A running header left in place is the
-            # safe failure, so the top stays uncut unless --trim-top.
-            if box is not None and not trim_top:
-                box = (box[0], 0, box[2], box[3])
-            trim_box.append(box)
-        return trim_box[0]
-
-    remote_base = f"papers/{figure.paper_id}/{figure.figure_id}"
-    objects = [
-        (
-            f"{remote_base}/source.webp",
-            lambda: webp_bytes(
-                source,
-                max_width=PUBLISHER_ASSET_MAX_WIDTH,
-                quality=PUBLISHER_ASSET_QUALITY,
-                box=publisher_box(),
-            ),
-            "image/webp",
-        ),
-        # Our own plot: lossless, full size.
-        (f"{remote_base}/digitized.webp", lambda: webp_bytes(digitized), "image/webp"),
-    ]
-    if include_overlays:
-        objects.append(
-            (
-                f"{remote_base}/overlay.webp",
-                lambda: webp_bytes(
-                    overlay,
-                    max_width=PUBLISHER_ASSET_MAX_WIDTH,
-                    quality=PUBLISHER_ASSET_QUALITY,
-                    box=publisher_box(),
-                ),
-                "image/webp",
-            )
-        )
-    pending = {
-        object_path
-        for object_path, _, _ in objects
-        if force_assets or not supabase.object_exists(object_path)
-    }
-    # source.webp and overlay.webp are shown side by side and must share one
-    # box. Skipping each existing object on its own let a resumed run encode
-    # one of the pair at this run's box next to the other at the box of an
-    # earlier run (the whole crop, or a different trim), so whenever either
-    # is going to be written, both are.
-    pair = {f"{remote_base}/source.webp", f"{remote_base}/overlay.webp"}
-    if include_overlays and pending & pair:
-        pending |= pair
-    uploaded_bytes = 0
-    for object_path, build, content_type in objects:
-        if object_path not in pending:
-            continue
-        payload = build()
-        supabase.upload(object_path, payload, content_type)
-        uploaded_bytes += len(payload)
-
-    # The data file is derived from the database, so "it exists" is not "it is
-    # current". It used to be skipped whenever present, which meant a change to
-    # which curves are published, or to how a label is written, never reached a
-    # file already uploaded. figure_csv_gz is deterministic (gzip mtime=0), so a
-    # rebuilt file whose MD5 equals the stored ETag is byte-identical and is
-    # left alone; anything else is replaced. Images are not rebuilt this way:
-    # re-encoding is expensive and their source pixels do not change. That
-    # includes the trim: a source.webp/overlay.webp pair already in Storage
-    # keeps the box it was uploaded with (before figure_trim, the whole crop)
-    # until a --force-assets run replaces it.
-    return uploaded_bytes + refresh_figure_csv(supabase, db_path, figure, force_assets)
-
-
 def refresh_figure_csv(supabase: Supabase, db_path: Path, figure: FigureRef, force: bool) -> int:
-    """Upload a figure's curves.csv.gz unless the stored copy is byte-identical."""
+    """Upload a figure's curves.csv.gz unless the stored copy is byte-identical.
+
+    The data file is derived from the database, so "it exists" is not "it is
+    current". It used to be skipped whenever present, which meant a change to
+    which curves are published, or to how a label is written, never reached a
+    file already uploaded. figure_csv_gz is deterministic (gzip mtime=0), so a
+    rebuilt file whose MD5 equals the stored ETag is byte-identical and is left
+    alone; anything else is replaced.
+    """
     csv_path = f"papers/{figure.paper_id}/{figure.figure_id}/curves.csv.gz"
     conn = sqlite3.connect(db_path)
     try:
@@ -1535,8 +1390,8 @@ def refresh_data_files_only(args: argparse.Namespace, db_path: Path) -> int:
     Exists because the full importer must not run without the assets volume: it
     would publish every figure as axis_unverified. A change that alters only
     what the data files contain — how a label is written — has no business
-    needing that volume, and this mode never reads it, never re-encodes an
-    image and never writes a table.
+    needing that volume, and this mode never reads it and never writes a
+    table.
     """
     url = os.environ.get("SUPABASE_URL", "").strip()
     secret_key = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
@@ -1570,7 +1425,7 @@ def refresh_data_files_only(args: argparse.Namespace, db_path: Path) -> int:
         f"{len(_refreshed_csvs)} of {len(refs)} ({uploaded / 1048576:.1f} MiB)."
         + (f" e.g. {', '.join(sorted(_refreshed_csvs)[:3])}" if _refreshed_csvs else "")
     )
-    print("No table was written and no image was touched.")
+    print("No table was written.")
     return 0
 
 
@@ -1744,67 +1599,24 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--dry-run", action="store_true")
-    # Storage objects are overwritten in place at fixed paths, so browsers that
-    # cached an image keep showing it; the frontend busts that cache with ?v=
-    # (IMAGE_ASSET_VERSION in frontend/src/lib/api.ts), which this script
-    # cannot see. Hence the reminder in both help texts below.
     parser.add_argument(
         "--force-assets",
         action="store_true",
         help=(
-            "Re-encode and overwrite the images (and re-upload the data "
-            "files) already in Storage. When this "
-            "changes image bytes, bump IMAGE_ASSET_VERSION in "
-            "frontend/src/lib/api.ts in the same rollout and deploy it after "
-            "the upload, or browsers keep the old images"
-        ),
-    )
-    parser.add_argument(
-        "--trim-top",
-        action="store_true",
-        help=(
-            "With --trim, also cut a running header above the plot. Off by "
-            "default: on the stored corpus the top cuts also removed the "
-            "sliced bottom of the panel above in 103 figures (see "
-            "upload_figure). Bottom cuts (caption lines) are always applied "
-            "with --trim."
-        ),
-    )
-    parser.add_argument(
-        "--trim",
-        action="store_true",
-        help=(
-            "Publish source.webp and overlay.webp without the caption line or "
-            "running header the crop caught (figure_trim.py). Off by default "
-            "until the trim has been checked on the stored corpus. Requires "
-            "--upload-overlays, so the two images are always written at one "
-            "box. Applies only to images this run encodes: figures already "
-            "live are re-encoded only with --force-assets, and that rollout "
-            "must also bump the frontend's IMAGE_ASSET_VERSION (see "
-            "--force-assets)"
+            "Re-upload every figure's curves.csv.gz, even when the stored copy "
+            "is byte-identical"
         ),
     )
     parser.add_argument(
         "--data-files-only",
         action="store_true",
         help="Rewrite each published curves.csv.gz whose content differs from the "
-        "database, and nothing else: no table writes, no images, no assets volume.",
+        "database, and nothing else: no table writes, no assets volume.",
     )
     parser.add_argument(
         "--metadata-only",
         action="store_true",
         help="Upsert paper metadata only; do not inspect or upload assets",
-    )
-    parser.add_argument(
-        "--upload-overlays",
-        action="store_true",
-        help=(
-            "Also publish overlay.webp (the extracted trace drawn on the source "
-            "figure) and set pxrd_figures.overlay_path. Roughly doubles the "
-            "Storage footprint of the pilot, so it is opt-in. When it is off "
-            "the overlay_path key is omitted entirely, which preserves any "
-            "value already live rather than clearing it"
-        ),
     )
     parser.add_argument(
         "--allow-unverified",
@@ -1832,16 +1644,6 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    # A trimmed source.webp next to an untrimmed live overlay.webp would put
-    # two different crops side by side on the figure page. Only a run that
-    # also encodes overlay.webp can keep the pair at one box: under
-    # --force-assets every source.webp is rewritten, and on a resumed run a
-    # missing source.webp can sit next to a live overlay.webp.
-    if args.trim and not args.upload_overlays:
-        raise ValueError(
-            "--trim requires --upload-overlays: source.webp and overlay.webp "
-            "are shown side by side and must be published at the same box."
-        )
     load_env_file(
         Path(__file__).resolve().parents[1] / ".env",
         allowed_keys={"SUPABASE_URL", "SUPABASE_SECRET_KEY"},
@@ -1893,7 +1695,6 @@ def main() -> int:
                 if assets_available and not args.metadata_only
                 else None
             ),
-            include_overlays=args.upload_overlays and not args.metadata_only,
         )
     finally:
         conn.close()
@@ -1917,25 +1718,19 @@ def main() -> int:
         if not assets_available:
             print(
                 f"Dry run: {assets_root} is not readable, so all "
-                f"{len(figure_refs)} figures are missing their images and every "
+                f"{len(figure_refs)} figures are missing their result.json and every "
                 "figure is reported as 'axis_unverified' above. That is the "
                 "state of this machine, not of the data."
             )
             return 1
-        missing = 0
-        raw_bytes = 0
-        wanted = ("crop.png", "replot_qa.png")
-        if args.upload_overlays:
-            wanted = (*wanted, "overlay.png")
-        for figure in figure_refs:
-            base = assets_root / figure.paper_id / figure.figure_id
-            for name in wanted:
-                path = base / name
-                if path.is_file():
-                    raw_bytes += path.stat().st_size
-                else:
-                    missing += 1
-        print(f"Dry run: {missing} missing image assets; {raw_bytes / 1048576:.1f} MiB raw images.")
+        # The only file a full run reads from the assets volume is each
+        # figure's result.json (axis-calibration provenance). No image is read.
+        missing = sum(
+            1
+            for figure in figure_refs
+            if not (assets_root / figure.paper_id / figure.figure_id / "result.json").is_file()
+        )
+        print(f"Dry run: {missing} of {len(figure_refs)} figures have no result.json.")
         return 0 if missing == 0 else 1
 
     unchecked = [
@@ -1991,20 +1786,16 @@ def main() -> int:
         )
         return 0
 
+    # Checked here, not in verify(): --metadata-only writes pxrd_papers only and
+    # works on either side of the migration.
+    supabase.require_image_columns_dropped()
+
     uploaded_bytes = 0
     executor = ThreadPoolExecutor(max_workers=args.workers)
     try:
         futures = {
             executor.submit(
-                upload_figure,
-                supabase,
-                db_path,
-                assets_root,
-                figure,
-                args.force_assets,
-                args.upload_overlays,
-                args.trim,
-                args.trim_top,
+                refresh_figure_csv, supabase, db_path, figure, args.force_assets
             ): figure
             for figure in figure_refs
         }
@@ -2016,7 +1807,7 @@ def main() -> int:
                 raise RuntimeError(f"Failed while uploading {figure.figure_id}: {exc}") from exc
             if completed % 25 == 0 or completed == len(futures):
                 print(
-                    f"Assets: {completed}/{len(futures)} figures; "
+                    f"Data files: {completed}/{len(futures)} figures; "
                     f"uploaded {uploaded_bytes / 1048576:.1f} MiB this run."
                 )
     except BaseException:

@@ -40,14 +40,13 @@ const SITE = "https://pxrd-peak.vercel.app";
  * read: this function is compiled under its own tsconfig and bundled on its
  * own, so it cannot import from src/. Change both together.
  */
-const DATASET_DOI_URL = "https://doi.org/10.5281/zenodo.23539381";
-const CODE_DOI_URL = "https://doi.org/10.5281/zenodo.23540144";
+const DATASET_URL = "https://github.com/AaronG211/pxrd_PEAK/releases";
+const CODE_URL = "https://github.com/AaronG211/pxrd_PEAK";
 const DATA_LICENSE_URL = "https://creativecommons.org/licenses/by/4.0/";
 const CODE_LICENSE_URL = "https://github.com/AaronG211/pxrd_PEAK/blob/main/LICENSE";
 const SOURCE_MATERIAL_NOTICE =
-  "Source figure crops, trace overlays and quoted figure captions are reproduced only so "
-  + "that each trace can be checked against its source; they remain under their original "
-  + "copyright (the publisher's or the authors') and are not covered by either license.";
+  "Figure captions quoted from the source papers remain under their original copyright "
+  + "(the publisher's or the authors') and are not covered by either license.";
 const BUCKET = "pxrd-assets";
 
 /** Every ID in the corpus matches this; anything else cannot exist. */
@@ -318,9 +317,8 @@ async function count(table: string, filters: Record<string, string> = {}): Promi
 /*
  * Used only for curves.csv.gz (the /data proxy and the figure-data redirect),
  * which stays unversioned: the redirect target is part of the public contract.
- * This API publishes no image URL. If it ever does, append the `?v=` that
- * IMAGE_ASSET_VERSION in src/lib/api.ts sets for source.webp / overlay.webp,
- * and bump the two together, or API clients will keep cached pre-trim images.
+ * This API publishes no image URL, and the site stores no image taken from a
+ * source article's figure (since 2026-11-11).
  */
 function storageUrl(path: string): string {
   return `${config().url}/storage/v1/object/public/${BUCKET}/${path}`;
@@ -502,7 +500,7 @@ function index() {
       "Read-only access to powder X-ray diffraction patterns digitized from figures in published "
       + "papers, mostly from the covalent organic framework (COF) literature. Live counts: "
       + `${SITE}/api/v1/stats. No key required. Responses are cached for up to an hour.`,
-    bulk_download: "https://github.com/AaronG211/pxrd_PEAK/releases",
+    bulk_download: DATASET_URL,
     documentation: `${SITE}/docs/api`,
     // The bulk reusers this index serves are the readers who most need the
     // terms, and the only ones who may never open a page with the footer on it.
@@ -514,8 +512,8 @@ function index() {
       not_covered: SOURCE_MATERIAL_NOTICE,
     },
     citation: {
-      dataset: DATASET_DOI_URL,
-      code: CODE_DOI_URL,
+      dataset: DATASET_URL,
+      code: CODE_URL,
       source_papers: "Cite the source paper of every curve you use as well; its DOI is the doi field of each record.",
       details: `${SITE}/docs/api#citing`,
     },

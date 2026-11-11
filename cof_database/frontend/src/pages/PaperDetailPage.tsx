@@ -4,9 +4,7 @@ import {
   ArrowLeft,
   Download,
   ExternalLink,
-  FileImage,
   Link2,
-  Maximize2,
   TriangleAlert,
 } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
@@ -15,7 +13,7 @@ import type { CurvePlotSeries } from "../components/CurvePlot";
 import { PublicationStatusBadge, PublicationStatusBanner } from "../components/PublicationStatusBadge";
 import { NON_CLEAN_ADMISSIONS, admissionMark } from "../lib/admission";
 import { fetchPaper, getMaterialLabelIndex } from "../lib/api";
-import { DATASET_CREATOR, DATASET_DOI_URL, DATA_LICENSE_URL } from "../lib/citation";
+import { DATASET_CREATOR, DATASET_URL, DATA_LICENSE_URL } from "../lib/citation";
 import { UNRECORDED_ROLE_LABEL, isExplicitRole } from "../lib/curveRole";
 import type { ExplicitCurveRole } from "../lib/curveRole";
 import { describeCurveDataError, fetchFigureCurves, isAbortError } from "../lib/curveData";
@@ -111,45 +109,6 @@ function Meta({ label, value }: { label: string; value: string | number | null }
       </p>
       <p className="mt-1 text-sm font-medium text-slate-700">{value}</p>
     </div>
-  );
-}
-
-function FigureImage({
-  url,
-  alt,
-  label,
-  icon,
-}: {
-  url: string;
-  alt: string;
-  label: string;
-  icon: React.ReactNode;
-}) {
-  return (
-    <figure className="bg-slate-50 p-4 md:p-6">
-      <figcaption className="mb-3 flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
-        <span className="flex items-center gap-2">{icon}{label}</span>
-        <a
-          href={url}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1 text-slate-500 transition hover:text-slate-900"
-        >
-          <Maximize2 className="h-3.5 w-3.5" /> Full size
-        </a>
-      </figcaption>
-      {/* Two tiles to a row now rather than three, so the cap is set by the
-          wider tile: at 430 px a landscape crop hit the height limit long before
-          it filled the column. */}
-      <a
-        href={url}
-        target="_blank"
-        rel="noreferrer"
-        className="flex min-h-[320px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white p-2 transition hover:border-slate-300 md:min-h-[440px]"
-      >
-        <img src={url} alt={alt} className="max-h-[600px] w-full object-contain" loading="lazy" />
-      </a>
-    </figure>
   );
 }
 
@@ -364,7 +323,7 @@ function FigureVerification({ figure }: { figure: PxrdFigure }) {
             The residual below measures how tightly the <em>chosen</em> fit sits on its
             own anchors. It does not measure whether the right fit was chosen, and it
             stays small on exactly these figures. Treat every peak position on this
-            figure as provisional and check it against the source crop.
+            figure as provisional and check it against the figure in the source paper.
           </p>
         </div>
       )}
@@ -438,7 +397,7 @@ function FigureVerification({ figure }: { figure: PxrdFigure }) {
           cross-checked. When they disagree, a second read breaks the tie and the figure is
           flagged. The axis-fit residual is computed from the winning fit alone, so it says
           nothing about that fit being correct — read it next to the method disagreement, not
-          instead of it. Compare against the original crop before reuse.
+          instead of it. Compare against the figure in the source paper before reuse.
         </p>
       </details>
     </div>
@@ -450,7 +409,8 @@ function FigureVerification({ figure }: { figure: PxrdFigure }) {
  *
  * The bundle is only fetched once the section nears the viewport: a paper can
  * carry many figures and each `curves.csv.gz` is tens to hundreds of kilobytes,
- * so fetching them all on mount would be far worse than the images already are.
+ * so fetching them all on mount would load every figure for a reader who may
+ * look at one.
  */
 function FigurePlotSection({
   figure,
@@ -527,8 +487,7 @@ function FigurePlotSection({
     <div ref={sectionRef} className="border-b border-slate-200 p-5 md:p-7">
       {!csvUrl ? (
         <p className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-          No curve data file is attached to this figure, so there is nothing to plot. The
-          source imagery above is still available.
+          No curve data file is attached to this figure, so there is nothing to plot.
         </p>
       ) : error ? (
         <div
@@ -813,8 +772,8 @@ function FigureCard({
     );
   };
 
-  // One self-identifying name, reused by the heading, the article, every image
-  // alt and both action controls. Panel letters repeat across a paper (a, b, f,
+  // One self-identifying name, reused by the heading, the article, the plot
+  // and both action controls. Panel letters repeat across a paper (a, b, f,
   // g, h, a, b, ...), so the letter alone left 13 figures indistinguishable in
   // every screen-reader navigation mode; the page number disambiguates them.
   const figureName = figure.figureLabel
@@ -877,31 +836,12 @@ function FigureCard({
       </div>
 
       {/*
-        Two tiles: the printed figure and the extracted trace drawn over it.
-
-        A third tile, "Digitized traces", used to sit between them. It was the
-        pipeline's own QA replot (replot_qa.png), captioned with a debug title
-        such as "...-p003-f05 accepted conf=1.00" in type too small to read, and
-        it showed nothing the interactive pattern below does not show better:
-        the same points, without zoom, readout or legend. Its width now goes to
-        the two images a reader actually compares.
+        No image tiles. Until 2026-11-11 the card opened with the source figure
+        crop and the extracted trace drawn over it. The site no longer shows any
+        image taken from the source article, so the card starts with the
+        interactive plot, drawn from our own curve data; the figure is
+        identified by its label, page and the paper's DOI.
       */}
-      <div className={`grid gap-px bg-slate-200 ${figure.overlayUrl ? "md:grid-cols-2" : ""}`}>
-        <FigureImage
-          url={figure.sourceCropUrl}
-          alt={`Published source crop for ${figureName}`}
-          label="Source figure crop"
-          icon={<FileImage className="h-4 w-4" />}
-        />
-        {figure.overlayUrl && (
-          <FigureImage
-            url={figure.overlayUrl}
-            alt={`Source and digitized overlay for ${figureName}`}
-            label="Trace overlay"
-            icon={<Activity className="h-4 w-4" />}
-          />
-        )}
-      </div>
 
       <FigurePlotSection figure={figure} csvUrl={csvUrl} figureName={figureName} />
 
@@ -1135,7 +1075,7 @@ export function PaperDetailPage() {
       ? `${paper.curveCount} digitized PXRD ${paper.curveCount === 1 ? "curve" : "curves"}`
         + ` from ${paper.figureCount} ${paper.figureCount === 1 ? "figure" : "figures"}`
         + `${paper.journal ? ` in ${paper.journal}` : ""}${paper.year ? ` (${paper.year})` : ""}.`
-        + ` Source crop, digitized trace and downloadable 2-theta / intensity data`
+        + ` Interactive replot and downloadable 2-theta / intensity data`
         + `${paper.doi ? `, linked to DOI ${paper.doi}` : ""}.`
       : undefined,
     canonical: paperId ? `/paper/${encodeURIComponent(paperId)}` : undefined,
@@ -1154,8 +1094,7 @@ export function PaperDetailPage() {
             : `Digitized PXRD data (${paper.paperNumber})`,
           description:
             `${paper.curveCount} powder X-ray diffraction curves digitized from `
-            + `${paper.figureCount} published figure(s), with the source crop preserved `
-            + `beside each reconstructed trace.`,
+            + `${paper.figureCount} published figure(s).`,
           // WHO MADE WHAT. This Dataset is the digitization — the extracted
           // points and their metadata — so its identifier is this page, its
           // creator is this project, and its license is the dataset's CC BY.
@@ -1186,11 +1125,10 @@ export function PaperDetailPage() {
             : undefined,
           // The site asks every reuser to cite the source paper as well.
           citation: doiUrl,
-          // Covers the points and their metadata only. The source crop, the
-          // overlay and a quoted caption are the article's, and are not under
-          // this license (see lib/citation).
+          // Covers the points and their metadata only. A quoted caption is the
+          // article's, and is not under this license (see lib/citation).
           license: DATA_LICENSE_URL,
-          isPartOf: { "@type": "Dataset", "@id": DATASET_DOI_URL, url: DATASET_DOI_URL },
+          isPartOf: { "@type": "Dataset", "@id": DATASET_URL, url: DATASET_URL },
           includedInDataCatalog: {
             "@type": "DataCatalog",
             name: "COF-PEAK",
@@ -1395,7 +1333,8 @@ export function PaperDetailPage() {
 
       <div className="mb-5 flex items-center gap-2 text-sm text-slate-500">
         <Activity className="h-4 w-4" />
-        Source imagery and digitized data are shown together for visual verification.
+        Curves are replotted from the digitized data. To check one, compare it with the
+        figure in the source paper.
       </div>
 
       <div className="space-y-8">

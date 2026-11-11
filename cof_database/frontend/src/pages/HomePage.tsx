@@ -331,8 +331,8 @@ export function HomePage() {
       (papers.length > 0
         ? `Powder X-ray diffraction patterns recovered from ${papers.length.toLocaleString()} published papers. `
         : "Powder X-ray diffraction patterns recovered from the published literature. ")
-      + "Every curve keeps its source figure, its digitized trace and downloadable "
-      + "2-theta / intensity data, so the extraction stays inspectable.",
+      + "Every curve is linked to its source paper and figure and comes with "
+      + "downloadable 2-theta / intensity data, so the extraction stays inspectable.",
     // Filter params are dropped from the canonical: labels and peak windows are
     // facets of one collection, and there are combinatorially many of them.
     // Pagination is kept, because /?page=7 is a distinct set of records.
@@ -1396,9 +1396,10 @@ export function HomePage() {
           <div>
             <p className="leading-relaxed text-slate-600">
               This database publishes digitized PXRD as a traceable research asset,
-              not as an opaque replacement for the source. Original figure crops,
-              curve labels, provenance, and downloadable data stay together so
-              researchers can inspect quality before reusing a trace.
+              not as an opaque replacement for the source. Curve labels, provenance,
+              automated checks and downloadable data stay together, and every curve
+              links to its source paper, so researchers can inspect quality before
+              reusing a trace.
             </p>
             {/* These three claims used to be tiles in the hero. They are worth
                 stating once, here, rather than charging every returning visitor
@@ -1416,12 +1417,12 @@ export function HomePage() {
               <div>
                 <dt className="flex items-center gap-2 text-sm font-semibold text-slate-900">
                   <ScanLine className="h-4 w-4 text-slate-500" aria-hidden="true" />
-                  Visually auditable
+                  Checkable
                 </dt>
                 <dd className="mt-1 text-sm leading-relaxed text-slate-600">
-                  The published crop sits beside an overlay of the extracted trace on
-                  that same figure, above an interactive replot of the data, so a
-                  reader can judge the fit against the ink.
+                  Each figure has an interactive replot of its curves and its 2θ
+                  calibration checks, so a reader can compare a trace with the
+                  published figure.
                 </dd>
               </div>
               <div>

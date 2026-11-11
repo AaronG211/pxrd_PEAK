@@ -61,7 +61,7 @@ export function describeCurveDataError(error: unknown): string {
       case "network":
         return `The curve data could not be downloaded. ${error.message}`;
       case "empty":
-        return "The curve file downloaded but contained no usable data points, so there is nothing to plot. The source imagery above is unaffected.";
+        return "The curve file downloaded but contained no usable data points, so there is nothing to plot.";
       case "format":
         return `The curve file is not in the expected format. ${error.message}`;
     }

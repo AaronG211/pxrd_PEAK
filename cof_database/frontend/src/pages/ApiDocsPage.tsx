@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { CitingAndLicense } from "../components/CitingAndLicense";
 import { getCorpusCounts } from "../lib/api";
+import { DATASET_URL } from "../lib/citation";
 import { usePageMeta } from "../hooks/usePageMeta";
 
 /**
@@ -26,7 +27,9 @@ const BASE = "https://pxrd-peak.vercel.app/api/v1";
  * The bulk release matching what this API serves. data-2026-10-01 held the
  * 9,385 curves the site published then; from 2026-10-21 the site publishes all
  * 11,445 with their admission class, and the release with that scope is this
- * tag (scripts/export_dataset.py --scope published).
+ * tag (scripts/export_dataset.py --scope published). Bump it when a newer data
+ * release is attached (DEPLOY_NOTES_2026-10-29.md, step 7 of the 2026-11-11
+ * order).
  */
 const RELEASE_TAG = "data-2026-10-21";
 const RELEASE_PAGE = `https://github.com/AaronG211/pxrd_PEAK/releases/tag/${RELEASE_TAG}`;
@@ -238,9 +241,11 @@ df = pd.read_csv(f"{BASE}/curves/{curves[0]['series_id']}/data?format=csv")`}</C
         <Section id="download" title="Download everything">
           <p>
             <strong className="font-semibold text-slate-900">Use the bulk files.</strong> The whole published
-            corpus is attached to a GitHub release as three gzipped CSVs and a README —{" "}
-            <a href={RELEASE_PAGE} target="_blank" rel="noreferrer" className={link}>{RELEASE_TAG}</a>. It is
-            the same data this API serves, with the same field names where they overlap.
+            corpus is attached to the repository&rsquo;s{" "}
+            <a href={DATASET_URL} target="_blank" rel="noreferrer" className={link}>GitHub releases</a> as
+            three gzipped CSVs and a README. The release that matches this API is{" "}
+            <a href={RELEASE_PAGE} target="_blank" rel="noreferrer" className={link}>{RELEASE_TAG}</a>: the
+            same data this API serves, with the same field names where they overlap.
           </p>
           <Code>{`import pandas as pd
 
