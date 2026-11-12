@@ -27,11 +27,13 @@ const BASE = "https://pxrd-peak.vercel.app/api/v1";
  * The bulk release matching what this API serves. data-2026-10-01 held the
  * 9,385 curves the site published then; from 2026-10-21 the site publishes all
  * 11,445 with their admission class, and the release with that scope is this
- * tag (scripts/export_dataset.py --scope published). Bump it when a newer data
- * release is attached (DEPLOY_NOTES_2026-10-29.md, step 7 of the 2026-11-11
- * order).
+ * tag (scripts/export_dataset.py --scope published). data-2026-11-11 is the
+ * first published release with that scope (data-2026-10-21 stayed a draft) and
+ * carries the 2026-10-29 relabel (clean 7,558, axis_unconfirmed 672). Bump it
+ * when a newer data release is attached (DEPLOY_NOTES_2026-10-29.md, step 7 of
+ * the 2026-11-11 order).
  */
-const RELEASE_TAG = "data-2026-10-21";
+const RELEASE_TAG = "data-2026-11-11";
 const RELEASE_PAGE = `https://github.com/AaronG211/pxrd_PEAK/releases/tag/${RELEASE_TAG}`;
 const RELEASE_FILES = `https://github.com/AaronG211/pxrd_PEAK/releases/download/${RELEASE_TAG}`;
 
