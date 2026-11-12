@@ -68,10 +68,9 @@ the 2026-10-21 change, which stay true as history.
 "Open PXRD Database" is too close to opXRD (Open Experimental Powder X-ray
 Diffraction Database, 2025); the PI flagged it and the author chose COF-PEAK.
 The URL (pxrd-peak.vercel.app) and the repository name (pxrd_PEAK) stay.
-**Live since 2026-11-02: the rename alone was pushed to main as 99e1fd4c
-(deployed in about 45 s; browse snapshot rebuilt; `npm run test:api` 84/84).**
-This branch carries the same change as 186bcad8, so merging it later changes
-no name. The site code is renamed (title, header, footer, citation, API
+**Live since 2026-11-02: the rename alone was pushed to main (99e1fd4c; after
+the 2026-11-12 history cleanup below it is c9547408).** This branch carries
+the same change (now 4e0c80c8), so merging it later changes no name. The site code is renamed (title, header, footer, citation, API
 name and docs, sitemap header, export file name, READMEs, `.zenodo.json`).
 Applied migrations keep the old name in their comments, as history; the
 internal sessionStorage key `open-pxrd-auth-return-to` is unchanged so that a
@@ -144,9 +143,9 @@ that copy is the author's call.
    - Every change of this work is still uncommitted on
      `feature/crossref-and-curve-plot`. Commit it first; the commit and the
      push are the author's to approve.
-   - The merge also brings 4c52d47c (the 2026-10-29 relabel: admission
-     mapping, frozen accession cohorts, migration draft) and 186bcad8, which
-     makes the same rename as 99e1fd4c, already on `main`.
+   - The merge also brings b7b68aa4 (the 2026-10-29 relabel: admission
+     mapping, frozen accession cohorts, migration draft) and 4e0c80c8, which
+     makes the same rename as c9547408, already on `main`.
    - Publish the data release first (author's click). On 2026-11-11
      `data-2026-10-21` was still a draft: the public releases page shows only
      `data-2026-10-01` (9,385 curves), and the download URLs on the API docs
@@ -217,11 +216,18 @@ Not changed here, for the author:
 - Earlier Vercel deployments keep their own URLs and still serve the three
   `/demo/*-source.png` crops and the old paper page until they are deleted in
   the Vercel dashboard.
-- The crops are still at the tip of the remote branches
-  `origin/codex/open-pxrd-site` and `origin/codex/pxrd-discovery-ux`, so they
-  stay browsable on GitHub after `main` is pushed. Deleting those branches, or
-  removing the files there, is the author's decision. The crops also stay in
-  the git history (added in 95310baa); removing them from it needs a history
-  rewrite, also the author's decision.
+- History cleanup, 2026-11-12 (author's decision): the three
+  `public/demo/*-source.png` crops were removed from every commit of `main`
+  and from the tags `data-2026-10-01` and `data-2026-10-21` (git filter-branch,
+  index filter on those three paths only), and the remote branches
+  `codex/open-pxrd-site` and `codex/pxrd-discovery-ux` were deleted. All 33
+  commits were compared old against new: no other file, author, date, message
+  or parent changed; the three commits made before the crops were added (from
+  the first commit c8118717) keep their hashes. main moved 99e1fd4c ->
+  c9547408; this branch was rebased onto it with an identical tree. Backup of
+  the full pre-cleanup repository: ~/Desktop/pxrd_PEAK_backup_before_history_cleanup_2026-11-11/
+  and the same folder under /Volumes/T7/pxrd_fetcher_data/backups/. GitHub may
+  still show the old commits by hash for a while; a full purge of its caches
+  needs GitHub Support.
 - Search engines may keep old image URLs for a while; once step 5 has run,
   those URLs no longer serve the image.
