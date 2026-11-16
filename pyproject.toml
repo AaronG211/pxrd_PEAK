@@ -5,12 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pxrd-fetcher"
 version = "0.1.0"
-description = "Local-first PXRD figure extraction CLI for scientific PDFs."
+description = "Structured extraction of powder X-ray diffraction curves from figures in scientific PDFs (COF-PEAK)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
-  { name = "OpenAI Codex" }
+  { name = "Shenghan Gao" },
+  { name = "Zhiling Zheng", email = "z.z@wustl.edu" },
 ]
 dependencies = [
   "matplotlib>=3.8",

@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use this software or the COF-PEAK data, please cite them as below, and cite the source article of every curve you use."
+title: "COF-PEAK: Structured Extraction of Diffraction Data from Covalent Organic Frameworks"
+type: software
+authors:
+  - family-names: Gao
+    given-names: Shenghan
+    affiliation: Washington University in St. Louis
+  - family-names: Zheng
+    given-names: Zhiling
+    affiliation: Washington University in St. Louis
+    email: z.z@wustl.edu
+repository-code: "https://github.com/AaronG211/pxrd_PEAK"
+url: "https://pxrd-peak.vercel.app"
+license: MIT
+keywords:
+  - powder X-ray diffraction
+  - covalent organic frameworks
+  - figure mining
+  - vision language models
+  - computer vision
