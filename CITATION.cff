@@ -19,3 +19,15 @@ keywords:
   - figure mining
   - vision language models
   - computer vision
+preferred-citation:
+  type: article
+  title: "Structured Extraction of Diffraction Data from Covalent Organic Frameworks"
+  authors:
+    - family-names: Gao
+      given-names: Shenghan
+    - family-names: Zheng
+      given-names: Zhiling
+  year: 2026
+  doi: "10.48550/arXiv.2611.23680"
+  url: "https://arxiv.org/abs/2611.23680"
+  repository: "https://arxiv.org/abs/2611.23680"

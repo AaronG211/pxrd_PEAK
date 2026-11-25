@@ -6,7 +6,7 @@ COF-PEAK extracts powder X-ray diffraction (PXRD) curves from figures in the cov
   <img src="docs/overview.png" alt="COF-PEAK extraction pipeline, from articles to released curves" width="750">
 </p>
 
-[Website](https://pxrd-peak.vercel.app) | [API](https://pxrd-peak.vercel.app/docs/api) | [Data release](https://github.com/AaronG211/pxrd_PEAK/releases/latest) | [Pipeline walkthrough](docs/pxrd_core_modules.pdf) | [Slides](docs/pxrd_pipeline_slides.html)
+[Paper (arXiv)](https://arxiv.org/abs/2611.23680) | [Website](https://pxrd-peak.vercel.app) | [API](https://pxrd-peak.vercel.app/docs/api) | [Data release](https://github.com/AaronG211/pxrd_PEAK/releases/latest) | [Pipeline walkthrough](docs/pxrd_core_modules.pdf) | [Slides](docs/pxrd_pipeline_slides.html)
 
 ## How it works
 
@@ -87,5 +87,20 @@ The production run processed 3,954 COF articles and kept 11,445 curves from 4,66
 Every curve carries an admission class that records which checks it passed, so flagged curves are disclosed, not removed. Use `clean` curves for analyses of absolute peak positions. Rendering, OCR, CV and post-processing are deterministic; the LLM's answers are part of the data. The files contain no figure images, so open the source article through the `doi` column to see a curve's figure.
 
 ## Citation and license
+
+The accompanying article is available as a preprint on arXiv: [arXiv:2611.23680](https://arxiv.org/abs/2611.23680).
+
+```bibtex
+@misc{gao2026cofpeak,
+  title         = {Structured Extraction of Diffraction Data from Covalent Organic Frameworks},
+  author        = {Gao, Shenghan and Zheng, Zhiling},
+  year          = {2026},
+  eprint        = {2611.23680},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CV},
+  doi           = {10.48550/arXiv.2611.23680},
+  url           = {https://arxiv.org/abs/2611.23680}
+}
+```
 
 Citation metadata is provided in [CITATION.cff](CITATION.cff). The code uses the [MIT License](LICENSE). The curves, points and metadata are released under CC BY 4.0. Please also cite the source article of every curve you use.

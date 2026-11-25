@@ -1,5 +1,6 @@
 import {
-  ARTICLE_STATUS,
+  ARTICLE_ARXIV_ID,
+  ARTICLE_URL,
   CODE_LICENSE_NAME,
   CODE_LICENSE_URL,
   CODE_URL,
@@ -40,7 +41,11 @@ export function CitingAndLicense() {
           <a href={CODE_URL} target="_blank" rel="noreferrer" className={`${link} [overflow-wrap:anywhere]`}>
             {CODE_URL}
           </a>{" "}
-          ({CODE_LICENSE_NAME}). The accompanying article is a {ARTICLE_STATUS}.
+          ({CODE_LICENSE_NAME}). The accompanying article is available as a preprint:{" "}
+          <a href={ARTICLE_URL} target="_blank" rel="noreferrer" className={link}>
+            {ARTICLE_ARXIV_ID}
+          </a>
+          .
         </p>
         <p className="mt-2">
           Cite the source paper of every curve you use as well. Its DOI is shown on each paper

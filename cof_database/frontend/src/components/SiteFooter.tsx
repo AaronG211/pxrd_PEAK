@@ -1,5 +1,6 @@
 import {
-  ARTICLE_STATUS,
+  ARTICLE_ARXIV_ID,
+  ARTICLE_URL,
   CODE_LICENSE_NAME,
   CODE_LICENSE_URL,
   CODE_URL,
@@ -46,7 +47,11 @@ export function SiteFooter() {
               <a href={CODE_URL} target="_blank" rel="noreferrer" className={`${link} [overflow-wrap:anywhere]`}>
                 {CODE_URL}
               </a>{" "}
-              ({CODE_LICENSE_NAME}). Article: {ARTICLE_STATUS}. Please also cite the source paper
+              ({CODE_LICENSE_NAME}). Article:{" "}
+              <a href={ARTICLE_URL} target="_blank" rel="noreferrer" className={link}>
+                {ARTICLE_ARXIV_ID}
+              </a>
+              . Please also cite the source paper
               of every curve you use; its DOI is shown on each paper page and in the{" "}
               <span className="font-mono">doi</span> field of every API record.
             </p>

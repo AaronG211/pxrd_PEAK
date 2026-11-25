@@ -33,11 +33,13 @@ export const DATASET_CITATION_TEXT =
   + "the covalent organic framework literature [Data set]. GitHub.";
 
 /**
- * Stated as exactly this until the article has a venue. Naming a journal before
- * acceptance would put a claim in every reader's reference list that may not
- * survive review.
+ * The accompanying article, cited by its arXiv preprint (posted 2026-11-18).
+ * The journal it is under review at is not named until acceptance: naming a
+ * venue before then would put a claim in every reader's reference list that
+ * may not survive review.
  */
-export const ARTICLE_STATUS = "manuscript in preparation";
+export const ARTICLE_ARXIV_ID = "arXiv:2611.23680";
+export const ARTICLE_URL = "https://arxiv.org/abs/2611.23680";
 
 export const DATA_LICENSE_NAME = "CC BY 4.0";
 export const DATA_LICENSE_URL = "https://creativecommons.org/licenses/by/4.0/";
